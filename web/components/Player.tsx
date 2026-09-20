@@ -336,6 +336,11 @@ export default function Player({ sid, session, connected, onExit }: Props) {
         onTimeUpdate={onTimeUpdate}
         onEnded={onEnded}
         onBlocked={() => setMode("blocked")}
+        // Playback started, so "点击继续播放" is a lie and comes down at once.
+        // `blocked` is the only mode this clears -- `deciding` and `waiting` are
+        // about the story, not about the decoder, and a replay must not cancel
+        // them.
+        onPlaying={() => setMode((m) => (m === "blocked" ? "watching" : m))}
       />
 
       {freezeUrl ? (

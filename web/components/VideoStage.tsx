@@ -43,12 +43,51 @@ interface Props {
    * the player staring at a frozen frame.
    */
   onBlocked?: (beatId: string) => void;
+  /**
+   * The visible clip is running. Fired from the element's own `playing` event, so
+   * it is the browser saying so rather than us inferring it from a resolved
+   * promise.
+   *
+   * This is the counterpart to `onBlocked`, and the pair has to be symmetric: the
+   * only honest way to retract "playback is blocked" is for playback to start.
+   * Without it, `onBlocked` was a one-way door -- clicking "点击继续播放" started
+   * the clip but left the panel sitting on top of it, because nothing told the
+   * parent it had worked.
+   */
+  onPlaying?: (beatId: string) => void;
 }
 
 const SLOTS = [0, 1, 2] as const;
 
+/**
+ * Was this `play()` rejection the browser refusing us, or just a newer request
+ * cancelling an older one?
+ *
+ * `HTMLMediaElement.play()` returns a promise that rejects for both, and the two
+ * want opposite responses. `NotAllowedError` means audible playback was refused
+ * for want of a user gesture -- the player needs to be told, because nothing will
+ * happen until they click. `AbortError` means a `load()` or `pause()` landed after
+ * the `play()` call and superseded it, which happens here as a matter of course:
+ * `show` can be called again before the previous one's promise settles, and React
+ * Strict Mode in development runs the effect that calls it twice on mount.
+ *
+ * Treating the second as the first is the whole bug: the clip was playing
+ * perfectly and "点击继续播放" was on top of it, then vanished ten seconds later
+ * when `onTimeUpdate` moved the mode to `deciding` near the end of the clip --
+ * which is exactly the "goes away by itself after a while" that was reported.
+ */
+function isAutoplayRefusal(err: unknown): boolean {
+  const name = err instanceof DOMException ? err.name : "";
+  if (name === "AbortError") return false;
+  // Anything else -- `NotAllowedError`, or something unforeseen -- counts, but the
+  // callers below also check `el.paused` before reporting it. The overlay's one job
+  // is to give a stalled player a way to start playback; if the clip is running,
+  // there is nothing for it to offer and it must not appear.
+  return true;
+}
+
 const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
-  { onTimeUpdate, onEnded, onBlocked },
+  { onTimeUpdate, onEnded, onBlocked, onPlaying },
   ref
 ) {
   const els = useRef<(HTMLVideoElement | null)[]>([null, null, null]);
@@ -144,16 +183,24 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
           e.style.zIndex = i === slot ? "2" : "1";
         }
         if (fromStart) el.currentTime = 0;
+        let refused = false;
         try {
           await el.play();
-        } catch {
-          onBlocked?.(beatId);
-          return;
+        } catch (err) {
+          refused = isAutoplayRefusal(err);
         }
+        // Whatever became of the new clip, the old one has to stop. This used to be
+        // behind an early `return` on the failure path, so a spurious rejection left
+        // two clips running at once -- inaudible in the picture, obvious in the
+        // sound.
         if (previous && previous !== beatId) {
           const prevSlot = slotOf.current.get(previous);
           if (prevSlot !== undefined) els.current[prevSlot]?.pause();
         }
+        // Only report a block if this call is still the current one and the element
+        // really is sitting still. A `show` that has been superseded says nothing:
+        // the newer call owns the screen and will report for itself.
+        if (refused && visible.current === beatId && el.paused) onBlocked?.(beatId);
       },
       visible: () => visible.current,
       position: () => {
@@ -177,8 +224,10 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
         if (!el) return;
         try {
           await el.play();
-        } catch {
-          if (id) onBlocked?.(id);
+        } catch (err) {
+          if (id && isAutoplayRefusal(err) && visible.current === id && el.paused) {
+            onBlocked?.(id);
+          }
         }
       },
       setMuted: (muted) => {
@@ -216,6 +265,13 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
             if (!id || id !== visible.current) return;
             const el = ev.currentTarget;
             onTimeUpdate?.(id, el.currentTime, Number.isFinite(el.duration) ? el.duration : 0);
+          }}
+          onPlaying={() => {
+            const id = beatOf.current[i];
+            // Buffered slots never play, but a slot that *was* visible can emit a
+            // late `playing` as it is being paused; gate on the current beat so a
+            // clip leaving the screen cannot speak for the one arriving.
+            if (id && id === visible.current) onPlaying?.(id);
           }}
           onEnded={() => {
             const id = beatOf.current[i];
