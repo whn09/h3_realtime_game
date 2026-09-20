@@ -1,0 +1,910 @@
+/* Dark by default and not themeable: the picture is the interface, and every
+   surface here sits on top of moving video. Anything lighter than this competes
+   with the frame for attention. */
+
+:root {
+  --bg: #07070a;
+  --ink: #f2efe8;
+  --dim: #9a958c;
+  --line: rgba(242, 239, 232, 0.14);
+  --panel: rgba(10, 10, 14, 0.72);
+  --accent: #d8b46a;
+  --bad: #d4696a;
+  --ok: #7fc08a;
+  --radius: 12px;
+  --shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.dim {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.err {
+  color: var(--bad);
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  vertical-align: -0.05em;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------------ setup */
+
+.setup {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 8vh 24px 12vh;
+}
+
+.setup header h1 {
+  font-size: 40px;
+  letter-spacing: 0.22em;
+  margin: 0 0 8px;
+  font-weight: 500;
+}
+
+.setup header p {
+  color: var(--dim);
+  margin: 0 0 40px;
+}
+
+.setup section {
+  margin-bottom: 36px;
+}
+
+.setup h2 {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 0 0 12px;
+}
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.preset {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+}
+
+.preset:hover {
+  border-color: rgba(216, 180, 106, 0.5);
+  transform: translateY(-1px);
+}
+
+.preset-on {
+  border-color: var(--accent);
+  background: rgba(216, 180, 106, 0.1);
+}
+
+.preset-title {
+  font-size: 18px;
+  letter-spacing: 0.1em;
+}
+
+.preset-genre {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.preset-premise {
+  font-size: 12.5px;
+  color: var(--dim);
+  /* Two lines: enough to tell them apart, not enough to turn the grid into a
+     wall of text the player has to read before they can start. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.setup textarea,
+.setup input,
+.setup select {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.setup textarea:focus,
+.setup input:focus,
+.setup select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.setup .row {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.setup .row label {
+  flex: 1;
+  font-size: 12px;
+  color: var(--dim);
+  display: grid;
+  gap: 6px;
+}
+
+.go {
+  background: var(--accent);
+  color: #15120b;
+  font-size: 16px;
+  letter-spacing: 0.12em;
+  padding: 12px 38px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.setup footer {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+/* ---------------------------------------------------------------- history */
+
+.history {
+  border-top: 1px solid var(--line);
+  padding-top: 28px;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.hrow {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 0.18s, background 0.18s;
+}
+
+.hrow:hover {
+  border-color: rgba(216, 180, 106, 0.5);
+  background: rgba(216, 180, 106, 0.06);
+}
+
+.hthumb {
+  width: 72px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.hbody {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.htitle {
+  font-size: 14.5px;
+  /* One line: the list is for recognising a run, not for re-reading it. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+/* ----------------------------------------------------------------- player */
+
+.player {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+.stage,
+.stage-video,
+.freeze {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.stage-video,
+.freeze {
+  /* `contain`, not `cover`: the clips are 864x480 and cropping a generated shot
+     throws away composition the Director actually specified. */
+  object-fit: contain;
+  /* Slow enough to read as a dissolve rather than a cut, short enough that the
+     swap still lands on the clip boundary. */
+  transition: opacity 0.18s linear;
+}
+
+/* Only the video letterboxes against black. The freeze still deliberately does
+   NOT: it is layered *over* a <video> that is already holding the identical
+   frame, so its own backdrop can never be the right thing to show -- and while
+   the still was still downloading, that backdrop was painted as a black
+   rectangle across the picture. See the preload note in `Player.tsx`. */
+.stage-video {
+  background: #000;
+}
+
+.freeze {
+  z-index: 3;
+  /* DESIGN 6.2's Ken Burns. The still is pixel-identical to the frame the video
+     left on screen, so the only thing that tells the player it froze is this
+     drift -- which is the point: it reads as a held shot, not as a stall. */
+  animation: kenburns 24s ease-out forwards;
+}
+
+@keyframes kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.045);
+  }
+}
+
+/* --------------------------------------------------------------- curtain */
+
+.curtain {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  background: #000;
+}
+
+.curtain-kf {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.5;
+  filter: blur(2px);
+  animation: kenburns 40s ease-out forwards;
+}
+
+.curtain-body {
+  position: relative;
+  max-width: 620px;
+  padding: 0 28px;
+  text-align: center;
+}
+
+.logline {
+  font-size: 22px;
+  line-height: 1.8;
+  margin: 0 0 20px;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.9);
+}
+
+.curtain-note {
+  color: var(--dim);
+  margin: 0;
+}
+
+/* -------------------------------------------------------------- decision */
+
+.decision {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 8;
+  padding: 80px 28px 26px;
+  display: grid;
+  gap: 14px;
+  background: linear-gradient(to top, rgba(4, 4, 6, 0.94) 12%, rgba(4, 4, 6, 0));
+  animation: rise 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.decision-top {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.narration {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.75;
+  max-width: 62ch;
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.9);
+}
+
+.ring {
+  flex: 0 0 auto;
+}
+
+.ring-track,
+.ring-arc {
+  fill: none;
+  stroke-width: 3;
+}
+
+.ring-track {
+  stroke: rgba(242, 239, 232, 0.16);
+}
+
+.ring-arc {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  /* Start at 12 o'clock and run down, which is what a countdown looks like. */
+  transform: rotate(-90deg);
+  transform-origin: 32px 32px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  transition: border-color 0.18s, transform 0.18s, background 0.18s;
+}
+
+.card:hover:not(:disabled) {
+  border-color: rgba(216, 180, 106, 0.6);
+  transform: translateY(-2px);
+}
+
+.card-chosen {
+  border-color: var(--accent);
+  background: rgba(216, 180, 106, 0.16);
+}
+
+.card-predicted::after {
+  content: "默认";
+  position: absolute;
+  margin: -26px 0 0 0;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.card-failed {
+  border-color: rgba(212, 105, 106, 0.55);
+}
+
+.card-label {
+  font-size: 16px;
+}
+
+.card-hint {
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+.card-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+.dot::before {
+  content: "●";
+  margin-right: 4px;
+  color: var(--dim);
+  font-size: 8px;
+  vertical-align: 0.15em;
+}
+
+.dot-ready::before {
+  color: var(--ok);
+}
+
+.dot-bad::before {
+  color: var(--bad);
+}
+
+.custom form {
+  display: flex;
+  gap: 8px;
+}
+
+.custom input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 16px;
+}
+
+.custom input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.custom form button {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 9px 22px;
+}
+
+.custom-open {
+  color: var(--dim);
+  font-size: 13px;
+  border-bottom: 1px dashed var(--line);
+  padding: 2px 0;
+}
+
+/* ------------------------------------------------------------------ replay */
+
+/* Bottom-left, deliberately out of the way. It shares the held moment with the
+   decision cards, and those are the thing the player is supposed to be reading:
+   this is an escape hatch for "wait, show me that again", not a call to action.
+   Above the cards in z-order all the same, because the overlay's backdrop covers
+   the full stage and would otherwise swallow the click. */
+.replay {
+  position: absolute;
+  z-index: 10;
+  left: 22px;
+  bottom: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.16s ease, border-color 0.16s ease;
+}
+
+.replay:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.34);
+}
+
+.replay span {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* -------------------------------------------------- responding / blocked */
+
+.responding,
+.ending,
+.blocked {
+  position: absolute;
+  z-index: 9;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  padding: 26px 34px;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  max-width: 80vw;
+}
+
+.responding p {
+  margin: 0 0 6px;
+}
+
+.responding p:first-child {
+  font-size: 19px;
+  letter-spacing: 0.08em;
+  /* Breathing rather than spinning: this wait is 20-40s and a spinner that long
+     reads as a hang. */
+  animation: breathe 2.6s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.responding-echo {
+  color: var(--accent);
+}
+
+.responding-detail {
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+.blocked {
+  display: grid;
+  gap: 6px;
+  font-size: 17px;
+}
+
+.blocked span {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.ending h2 {
+  margin: 0 0 12px;
+  font-size: 26px;
+  letter-spacing: 0.14em;
+}
+
+.ending p {
+  margin: 0 0 18px;
+  color: var(--dim);
+  max-width: 46ch;
+  line-height: 1.85;
+}
+
+.ending button {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 9px 24px;
+}
+
+/* -------------------------------------------------------------------- hud */
+
+.hud {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  font-size: 12px;
+  background: linear-gradient(to bottom, rgba(4, 4, 6, 0.72), rgba(4, 4, 6, 0));
+  pointer-events: none;
+}
+
+.hud button,
+.hud-live {
+  pointer-events: auto;
+}
+
+.hud-left,
+.hud-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hud-title {
+  letter-spacing: 0.16em;
+  margin-right: 6px;
+}
+
+.hud-home {
+  pointer-events: auto;
+  color: inherit;
+  padding: 0;
+}
+
+.hud-home:hover {
+  color: var(--accent);
+}
+
+.held-note {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+  white-space: nowrap;
+  /* The same breathing the "responding" panel uses, for the same reason: a
+     static label next to a static picture is indistinguishable from a freeze. */
+  animation: breathe 2.8s ease-in-out infinite;
+}
+
+.hud-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.hud-dim {
+  opacity: 0.6;
+}
+
+.hud-warn {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(212, 105, 106, 0.2);
+  color: #f0b4b4;
+}
+
+.hud-btn {
+  padding: 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--dim);
+}
+
+.hud-btn:hover,
+.hud-btn-on {
+  color: var(--accent);
+  border-color: rgba(216, 180, 106, 0.55);
+}
+
+.hud-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.hud-live-off {
+  background: var(--bad);
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------------- tree */
+
+.tree {
+  position: absolute;
+  inset: auto 14px 14px 14px;
+  z-index: 10;
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 8, 11, 0.9);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  animation: rise 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tree-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.tree-hint {
+  color: var(--dim);
+  flex: 1;
+}
+
+.tree-head button {
+  color: var(--dim);
+}
+
+.tree-scroll {
+  overflow: auto;
+  padding: 16px;
+}
+
+.tree-canvas {
+  position: relative;
+}
+
+.tree-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.edge-live {
+  stroke: rgba(216, 180, 106, 0.75);
+  stroke-width: 2;
+}
+
+.node {
+  position: absolute;
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.node img,
+.node-blank {
+  width: 44px;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.node-label {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.node-path {
+  border-color: rgba(216, 180, 106, 0.4);
+}
+
+.node-path .node-label {
+  color: var(--ink);
+}
+
+.node-cursor {
+  border-color: var(--accent);
+  background: rgba(216, 180, 106, 0.14);
+}
+
+.node-failed {
+  border-color: rgba(212, 105, 106, 0.5);
+}
+
+.node-badge {
+  position: absolute;
+  right: 5px;
+  bottom: 3px;
+  font-size: 9px;
+  color: var(--dim);
+}
+
+/* ------------------------------------------------------------------ misc */
+
+.toast {
+  position: absolute;
+  z-index: 11;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(212, 105, 106, 0.92);
+  color: #1a0d0d;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.fatal {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  text-align: center;
+  padding: 24px;
+}
+
+.fatal button {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 9px 24px;
+}
+
+@media (max-width: 640px) {
+  .decision {
+    padding: 60px 14px 16px;
+  }
+  .cards {
+    grid-template-columns: 1fr;
+  }
+  .hud {
+    font-size: 11px;
+  }
+}

@@ -1,0 +1,15 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+pydantic>=2.7
+
+# Bedrock. `anthropic` carries the Mantle client used for the three text models;
+# boto3 is only needed for Nova Canvas keyframes.
+anthropic>=0.69
+boto3>=1.34
+
+# Pillow + numpy: the synthetic keyframe fallback and the frame fingerprint the
+# drift check runs on. Both are optional at import time -- the code degrades if
+# they are missing -- but the drift system is blind without them.
+pillow>=10.0
+numpy>=1.24

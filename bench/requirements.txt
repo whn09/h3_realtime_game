@@ -1,0 +1,6 @@
+httpx>=0.27
+numpy>=1.26
+Pillow>=10.4
+# bench_promptir.py only; Bedrock access goes through the Anthropic SDK's
+# Mantle client rather than boto3's Converse API.
+anthropic[bedrock]>=1.0

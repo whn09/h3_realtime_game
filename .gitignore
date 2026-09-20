@@ -1,0 +1,32 @@
+# Dependencies. Both are reproducible from the lockfiles next to them, and both
+# are enormous: web/node_modules is 365M, .venv is 140M.
+.venv/
+node_modules/
+
+# Python bytecode.
+__pycache__/
+*.py[cod]
+
+# Next.js build output and its incremental type cache.
+web/.next/
+web/out/
+web/tsconfig.tsbuildinfo
+
+# Generated sessions, clips and keyframes. 136M and growing, and every byte of it
+# is a render of some past playthrough -- reproducible in the sense that it can be
+# regenerated, and meaningless in the sense that nobody else's copy would match.
+# The deployed service keeps this outside the code tree (ASSETS_DIR); this rule is
+# for local runs, which default to ./data.
+services/orchestrator/data/
+services/h3-wrapper/clips/
+
+# Real configuration. Every one of these has a committed .env.example next to it
+# that documents the keys; the values are per-machine (and in the orchestrator's
+# case include a Bedrock bearer token).
+.env
+.env.local
+.env.*.local
+
+# Machine-local editor/agent state.
+.claude/settings.local.json
+.DS_Store
