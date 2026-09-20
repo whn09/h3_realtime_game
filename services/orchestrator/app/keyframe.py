@@ -32,7 +32,7 @@ from pathlib import Path
 from .config import settings
 from .schema import ShotSpec, WorldBible, WorldState
 
-log = logging.getLogger("kunlun.keyframe")
+log = logging.getLogger("h3game.keyframe")
 
 _NEGATIVE = (
     "text, watermark, logo, subtitles, blurry, low quality, distorted anatomy, "

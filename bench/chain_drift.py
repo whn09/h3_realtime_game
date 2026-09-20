@@ -199,7 +199,7 @@ async def amain() -> int:
 
     seed = (
         Path(args.seed_image) if args.seed_image
-        else make_test_keyframe(Path("/tmp/kunlun-bench/keyframe.png"))
+        else make_test_keyframe(Path("/tmp/h3game-bench/keyframe.png"))
     )
     print(f"run {args.run_id}: {args.beats} beats, seed={seed}")
 

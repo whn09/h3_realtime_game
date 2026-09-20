@@ -36,7 +36,7 @@ export default function Hud({
         {/* Leaving abandons nothing: the session is on disk and listed under
             history, so this is a way back to the shelf, not a quit. */}
         <button className="hud-title hud-home" onClick={onExit} title="回到开头（这局会留在历史里）">
-          {session.bible?.genre || session.genre || "昆仑"}
+          {session.bible?.genre || session.genre || "故事"}
         </button>
         {state ? (
           <>

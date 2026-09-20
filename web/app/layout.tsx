@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "昆仑 · 生成式互动影像",
+  title: "生成式互动影像",
   description: "你说一个世界，它拍给你看。",
 };
 

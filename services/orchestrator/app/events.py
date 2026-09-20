@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger("kunlun.events")
+log = logging.getLogger("h3game.events")
 
 _QUEUE_MAX = 256
 

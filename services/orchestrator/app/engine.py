@@ -63,7 +63,7 @@ from .schema import (
 from .store import Store
 from .worldsmith import Worldsmith
 
-log = logging.getLogger("kunlun.engine")
+log = logging.getLogger("h3game.engine")
 
 
 class EngineError(RuntimeError):

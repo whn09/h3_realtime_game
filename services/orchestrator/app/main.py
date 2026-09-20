@@ -44,7 +44,7 @@ logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-log = logging.getLogger("kunlun.main")
+log = logging.getLogger("h3game.main")
 
 _HEARTBEAT_S = 15.0
 
@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
         await store.stop()
 
 
-app = FastAPI(title="kunlun-orchestrator", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="h3game-orchestrator", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

@@ -333,7 +333,7 @@ async def amain() -> int:
 
     keyframe_path = (
         Path(args.keyframe) if args.keyframe
-        else make_test_keyframe(Path("/tmp/kunlun-bench/keyframe.png"))
+        else make_test_keyframe(Path("/tmp/h3game-bench/keyframe.png"))
     )
     keyframe = str(keyframe_path.resolve())
 

@@ -32,7 +32,7 @@ from pydantic import BaseModel, ValidationError
 
 from .config import settings
 
-log = logging.getLogger("kunlun.llm")
+log = logging.getLogger("h3game.llm")
 
 T = TypeVar("T", bound=BaseModel)
 

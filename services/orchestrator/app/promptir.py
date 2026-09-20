@@ -29,7 +29,7 @@ from .config import settings
 from .llm import LLM, LLMError
 from .schema import BranchIntent, Character, IRSections, ShotSpec, WorldBible, WorldState
 
-log = logging.getLogger("kunlun.promptir")
+log = logging.getLogger("h3game.promptir")
 
 _CAMERA = {
     "wide": "大远景，广角，固定镜头",

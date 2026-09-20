@@ -31,7 +31,7 @@ import httpx
 from .config import settings
 from .schema import IRSections
 
-log = logging.getLogger("kunlun.gpu")
+log = logging.getLogger("h3game.gpu")
 
 PRIORITY_BLOCKING = 0     # the player is waiting on this clip right now
 PRIORITY_PREGEN = 10      # speculative sibling

@@ -122,7 +122,7 @@ def main() -> int:
 
     keyframe_path = (
         Path(args.keyframe) if args.keyframe
-        else make_test_keyframe(Path("/tmp/kunlun-bench/keyframe.png"))
+        else make_test_keyframe(Path("/tmp/h3game-bench/keyframe.png"))
     )
     if not keyframe_path.exists():
         print(f"keyframe not found: {keyframe_path}")

@@ -55,7 +55,7 @@ class Settings:
 
     # --- Async archival ------------------------------------------------------
     s3_bucket: str = field(default_factory=lambda: _env("S3_BUCKET", ""))
-    s3_prefix: str = field(default_factory=lambda: _env("S3_PREFIX", "kunlun/clips").strip("/"))
+    s3_prefix: str = field(default_factory=lambda: _env("S3_PREFIX", "h3game/clips").strip("/"))
 
     # --- Binaries ------------------------------------------------------------
     ffmpeg: str = field(default_factory=lambda: _env("FFMPEG_BIN", "ffmpeg"))

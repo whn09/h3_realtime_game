@@ -36,7 +36,7 @@ from .schema import (
     WorldState,
 )
 
-log = logging.getLogger("kunlun.director")
+log = logging.getLogger("h3game.director")
 
 _SHOT_CYCLE = ["medium", "wide", "closeup", "pov", "tracking", "aerial"]
 

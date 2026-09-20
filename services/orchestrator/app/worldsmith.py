@@ -22,7 +22,7 @@ from .config import settings
 from .llm import LLM, LLMError
 from .schema import ActOutline, Character, ShotSpec, WorldBible, WorldState
 
-log = logging.getLogger("kunlun.worldsmith")
+log = logging.getLogger("h3game.worldsmith")
 
 
 class InitialState(BaseModel):

@@ -78,7 +78,7 @@ export default function Setup({ onCreated, onResume }: Props) {
   return (
     <div className="setup">
       <header>
-        <h1>昆仑</h1>
+        <h1>生成式互动影像</h1>
         <p>你说一个世界，它拍给你看。每一次选择都会即时生成下一段影像。</p>
       </header>
 

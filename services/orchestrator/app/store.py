@@ -23,7 +23,7 @@ from pathlib import Path
 from .config import settings
 from .schema import Session
 
-log = logging.getLogger("kunlun.store")
+log = logging.getLogger("h3game.store")
 
 _FLUSH_DELAY_S = 0.5
 
