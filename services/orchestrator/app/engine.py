@@ -189,6 +189,7 @@ class Engine:
         # also the only latency in the service that no amount of pre-generation can
         # hide, because the root beat's keyframe prompt comes out of this call.
         session.timings = dict(timings)
+        session.bible_notes = list(notes)
         self.store.touch(session.id)
         rt.bus.emit(
             "bible.ready",
@@ -581,6 +582,7 @@ class Engine:
         # she look different after the cut" is otherwise unanswerable after the
         # fact: the image is on disk but the sentence that produced it is not.
         log.info("keyframe prompt for %s: %s", beat.id, prompt)
+        beat.keyframe_prompt = prompt
         frame = await self.keyframer.generate(
             session.id, f"kf-{beat.id}", prompt,
             seed=abs(hash(beat.id)) % 2_147_483_647,
@@ -821,6 +823,10 @@ def _beat_summary(beat: Beat) -> dict[str, object]:
         "poster_url": beat.poster_url,
         "last_frame_url": beat.last_frame_url,
         "keyframe_url": beat.keyframe_url,
+        # Both for the debug panel, and both cheap: a string the model already
+        # produced and a list that is empty on the healthy path.
+        "keyframe_prompt": beat.keyframe_prompt,
+        "ir_violations": beat.ir_violations,
         "duration_ms": beat.duration_ms,
         "has_audio": beat.has_audio,
         "narration": beat.narration,
@@ -850,6 +856,11 @@ def session_view(session: Session) -> dict[str, object]:
         "genre": session.genre,
         "pov": session.pov,
         "bible": session.bible.model_dump(mode="json") if session.bible else None,
+        # For the debug panel. Both are session-scoped and neither has anywhere
+        # else to live: `timings` is the Worldsmith's, which belongs to no beat,
+        # and the notes explain the bible sitting next to them.
+        "bible_notes": session.bible_notes,
+        "timings": session.timings,
         "opening_keyframe_url": session.opening_keyframe_url,
         "root_id": session.root_id,
         "cursor": session.cursor,

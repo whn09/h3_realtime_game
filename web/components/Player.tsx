@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AUTO_ADVANCE_S, DECISION_LEAD_S, choose, seek } from "@/lib/api";
-import type { Beat, SessionView } from "@/lib/types";
+import type { Beat, GameEvent, SessionView } from "@/lib/types";
+import DebugPanel from "./DebugPanel";
 import DecisionOverlay from "./DecisionOverlay";
 import Hud from "./Hud";
 import StoryTree from "./StoryTree";
@@ -38,12 +39,14 @@ interface Props {
   sid: string;
   session: SessionView;
   connected: boolean;
+  /** The SSE log, for the debug panel's 事件 tab. Nothing else reads it. */
+  events: GameEvent[];
   onExit: () => void;
 }
 
 type Mode = "idle" | "watching" | "deciding" | "waiting" | "blocked";
 
-export default function Player({ sid, session, connected, onExit }: Props) {
+export default function Player({ sid, session, connected, events, onExit }: Props) {
   const stage = useRef<StageHandle>(null);
   const [shownId, setShownId] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("idle");
@@ -59,6 +62,7 @@ export default function Player({ sid, session, connected, onExit }: Props) {
   const [waitNote, setWaitNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [muted, setMuted] = useState(false);
 
   const committing = useRef(false);
@@ -98,6 +102,28 @@ export default function Player({ sid, session, connected, onExit }: Props) {
   useEffect(() => {
     stage.current?.setMuted(muted);
   }, [muted]);
+
+  /**
+   * `d` toggles the debug panel.
+   *
+   * Guarded on the event target, not on `mode`: `DecisionOverlay` has a free-text
+   * action box, and a player typing 「打开门」 must not have the `d` swallowed by a
+   * global shortcut. `isContentEditable` is in the check for the same reason even
+   * though nothing here uses it yet -- the cost is one property read, and the bug
+   * it prevents is silent.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "d" && e.key !== "D") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || t?.isContentEditable) return;
+      setDebugOpen((o) => !o);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // -- committing a choice ------------------------------------------------- //
   const commit = useCallback(
@@ -424,11 +450,23 @@ export default function Player({ sid, session, connected, onExit }: Props) {
         onToggleMute={() => setMuted((m) => !m)}
         onToggleTree={() => setTreeOpen((t) => !t)}
         treeOpen={treeOpen}
+        debugOpen={debugOpen}
+        onToggleDebug={() => setDebugOpen((d) => !d)}
         onExit={onExit}
       />
 
       {treeOpen ? (
         <StoryTree session={session} onSeek={onSeek} onClose={() => setTreeOpen(false)} />
+      ) : null}
+
+      {debugOpen ? (
+        <DebugPanel
+          sid={sid}
+          session={session}
+          shown={shown}
+          events={events}
+          onClose={() => setDebugOpen(false)}
+        />
       ) : null}
 
       {error ? (

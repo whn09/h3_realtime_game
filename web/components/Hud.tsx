@@ -14,8 +14,10 @@ interface Props {
   connected: boolean;
   muted: boolean;
   treeOpen: boolean;
+  debugOpen: boolean;
   onToggleMute: () => void;
   onToggleTree: () => void;
+  onToggleDebug: () => void;
   onExit: () => void;
 }
 
@@ -25,8 +27,10 @@ export default function Hud({
   connected,
   muted,
   treeOpen,
+  debugOpen,
   onToggleMute,
   onToggleTree,
+  onToggleDebug,
   onExit,
 }: Props) {
   const state = shown?.state;
@@ -79,6 +83,13 @@ export default function Hud({
         </button>
         <button className={treeOpen ? "hud-btn hud-btn-on" : "hud-btn"} onClick={onToggleTree}>
           故事树
+        </button>
+        <button
+          className={debugOpen ? "hud-btn hud-btn-on" : "hud-btn"}
+          onClick={onToggleDebug}
+          title="世界观、IR 提示词、各段耗时（快捷键 D）"
+        >
+          调试
         </button>
         <span
           className={connected ? "hud-live" : "hud-live hud-live-off"}

@@ -1018,6 +1018,328 @@ button:disabled {
   padding: 9px 24px;
 }
 
+/* ------------------------------------------------------------------ debug */
+
+/* A right-hand rail rather than a centred modal, for one reason: what it reports
+   on is the picture, and a modal covers the picture. It sits above the story
+   tree (z-index 10) because it is the only surface here that is deliberately
+   allowed to obscure -- it is opened on purpose and closed with the same key. */
+
+.dbg {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 11;
+  width: min(460px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: rgba(7, 7, 10, 0.94);
+  backdrop-filter: blur(16px);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  animation: slide-in 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+.dbg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.dbg-head nav {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+
+.dbg-tab {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+.dbg-tab:hover {
+  color: var(--ink);
+}
+
+.dbg-tab-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dbg-close {
+  color: var(--dim);
+  padding: 4px 8px;
+}
+
+.dbg-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 14px 28px;
+  /* Tabular figures, so a column of latencies lines up and a 9 -> 10 digit jump
+     does not shift the whole row. The panel is nothing but numbers. */
+  font-variant-numeric: tabular-nums;
+}
+
+.dbg-body h4 {
+  margin: 20px 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+.dbg-body h4 code {
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+
+.dbg-empty {
+  margin: 6px 0;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+/* -- timing bars -- */
+
+.dbg-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dbg-bar {
+  display: grid;
+  grid-template-columns: 96px 1fr 64px;
+  align-items: center;
+  gap: 8px;
+}
+
+.dbg-bar-label {
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
+.dbg-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(242, 239, 232, 0.07);
+  overflow: hidden;
+}
+
+.dbg-bar-track i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.dbg-bar-value {
+  text-align: right;
+  font-size: 12px;
+}
+
+.dbg-bar-total {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.dbg-bar-total .dbg-bar-label,
+.dbg-bar-total .dbg-bar-value {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* -- key/value grid -- */
+
+.dbg-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dbg-kv > div {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.dbg-kv b {
+  flex: none;
+  width: 96px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.dbg-kv span {
+  flex: 1;
+  word-break: break-word;
+}
+
+.dbg-kv-tight {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.dbg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dbg-table th {
+  text-align: right;
+  font-weight: 400;
+  color: var(--dim);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.dbg-table th:first-child,
+.dbg-table td:first-child {
+  text-align: left;
+}
+
+.dbg-table td {
+  text-align: right;
+  padding: 4px 0;
+}
+
+/* -- prose and prompts -- */
+
+.dbg-text {
+  margin: 0 0 6px;
+  line-height: 1.65;
+}
+
+.dbg-en {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.dbg-miss {
+  color: var(--bad);
+  font-style: normal;
+}
+
+/* The prompts are the reason this panel exists, so they are shown whole: wrapped
+   monospace, never clipped and never scrolled sideways. A truncated prompt
+   answers no question at all. */
+.dbg-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(242, 239, 232, 0.04);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dbg-card {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.dbg-card > b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.dbg-card code {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.dbg-pill {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.dbg-sub {
+  margin: 4px 0 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.dbg-notes {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.7;
+}
+
+.dbg-notes-warn {
+  color: var(--accent);
+}
+
+/* -- event log -- */
+
+.dbg-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dbg-events li {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(242, 239, 232, 0.05);
+}
+
+.dbg-seq {
+  flex: none;
+  width: 30px;
+  text-align: right;
+  color: var(--dim);
+  opacity: 0.6;
+}
+
+.dbg-etype {
+  flex: none;
+  width: 118px;
+  color: var(--accent);
+}
+
+.dbg-edetail {
+  flex: 1;
+  color: var(--dim);
+  word-break: break-all;
+}
+
 @media (max-width: 640px) {
   .decision {
     padding: 60px 14px 16px;
@@ -1027,5 +1349,11 @@ button:disabled {
   }
   .hud {
     font-size: 11px;
+  }
+  .dbg-bar {
+    grid-template-columns: 78px 1fr 56px;
+  }
+  .dbg-etype {
+    width: 96px;
   }
 }

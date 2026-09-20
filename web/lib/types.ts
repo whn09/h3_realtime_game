@@ -69,12 +69,20 @@ export interface Beat {
    */
   last_frame_url: string | null;
   keyframe_url: string | null;
+  /**
+   * The image prompt that produced `keyframe_url`, or `""` on a beat that
+   * inherited its first frame from its parent -- which is most of them. Empty is
+   * therefore information, not a gap: it means nothing re-drew the cast here.
+   */
+  keyframe_prompt: string;
   duration_ms: number | null;
   has_audio: boolean;
   narration: string;
   transition: Transition;
   shot_type: ShotType;
   ir_source: string;
+  /** `ir_validator` rules this beat's IR broke. Empty on the healthy path. */
+  ir_violations: string[];
   options: OptionSummary[];
   /** option index, as a string key -- it survives a JSON round trip that way. */
   children: Record<string, string>;
@@ -85,14 +93,65 @@ export interface Beat {
   state: StateSummary;
 }
 
+/**
+ * A character as the bible freezes them. `appearance` is reused *verbatim* in
+ * every IR that features them and `appearance_en` is what re-draws them at a
+ * cut, so the debug panel shows both in full rather than truncated: the whole
+ * point of reading them is to check they are specific enough to reproduce.
+ */
+export interface BibleCharacter {
+  id: string;
+  name: string;
+  appearance: string;
+  appearance_en: string;
+  voice: string;
+  arc: string;
+}
+
+/**
+ * The frozen world bible, exactly as `WorldBible.model_dump()` emits it. Written
+ * out in full rather than left as an index signature: this shape was wrong in
+ * three places (`characters[].role`, `outline[].goal`, `outline[].turn` do not
+ * exist server-side; `appearance_en` and `style_anchor_en` were missing) and the
+ * index signature is what let it stay wrong, because every misspelling typed as
+ * `unknown` instead of failing.
+ */
 export interface WorldBible {
-  logline: string;
+  premise: string;
   genre: string;
+  logline: string;
   style_anchor: string;
+  /** English, for the image model only. `""` when the Worldsmith skipped it. */
+  style_anchor_en: string;
   music_bible: string;
-  characters: { name: string; appearance: string; role?: string }[];
-  outline: { act: number; goal: string; turn: string }[];
-  [key: string]: unknown;
+  ambience: string;
+  pov: "first" | "third";
+  protagonist_id: string;
+  characters: BibleCharacter[];
+  world_rules: string[];
+  outline: { act: number; milestone: string; target_beats: number }[];
+  stat_names: string[];
+  opening: {
+    type: ShotType;
+    subject: string;
+    action: string;
+    setting: string;
+    mood: string;
+    dialogue: { speaker: string; line: string }[];
+    sfx_focus: string;
+  } | null;
+  opening_keyframe_prompt: string;
+}
+
+/** `GET /sessions/{sid}/beats/{beat_id}/ir` -- the exact string H3 was given. */
+export interface IrView {
+  prompt: string;
+  meta: {
+    source?: string;
+    attempts?: number;
+    violations?: string[];
+    intent?: Record<string, unknown>;
+  };
 }
 
 export interface SessionView {
@@ -103,6 +162,14 @@ export interface SessionView {
   genre: string;
   pov: "first" | "third";
   bible: WorldBible | null;
+  /**
+   * What the server had to invent because the Worldsmith left it out -- default
+   * stats, a missing `appearance_en`. Each line is a reason this run behaves
+   * unlike its premise, so they are the first thing to read when it does.
+   */
+  bible_notes: string[];
+  /** Session-scoped latencies. Only the Worldsmith lands here; beats have their own. */
+  timings: Record<string, number>;
   opening_keyframe_url: string | null;
   root_id: string | null;
   cursor: string | null;

@@ -1,4 +1,4 @@
-import type { PresetsResponse, SessionSummary, SessionView } from "./types";
+import type { IrView, PresetsResponse, SessionSummary, SessionView } from "./types";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") || "http://127.0.0.1:8100";
@@ -100,10 +100,14 @@ export const seek = (sid: string, beatId: string) =>
     body: JSON.stringify({ beat_id: beatId }),
   });
 
+/**
+ * The exact prompt H3 was given for one beat, read back off the archive on disk
+ * rather than out of the session document -- the IR is not in `SessionView` at
+ * all, deliberately, because it is 200-320 characters per beat times every
+ * pre-generated branch. 404 until the beat has finished compiling.
+ */
 export const getIr = (sid: string, beatId: string) =>
-  call<{ prompt: string; meta: Record<string, unknown> }>(
-    `/sessions/${sid}/beats/${beatId}/ir`
-  );
+  call<IrView>(`/sessions/${sid}/beats/${beatId}/ir`);
 
 export const eventsUrl = (sid: string, after: number) =>
   `${API_BASE}/sessions/${sid}/events?after=${after}`;

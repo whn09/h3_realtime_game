@@ -16,7 +16,7 @@ import { useSession } from "@/lib/useSession";
 
 export default function Home() {
   const [sid, setSid] = useState<string | null>(null);
-  const { session, connected, error } = useSession(sid);
+  const { session, events, connected, error } = useSession(sid);
 
   useEffect(() => {
     const fromHash = () => {
@@ -84,6 +84,7 @@ export default function Home() {
       sid={sid}
       session={session}
       connected={connected}
+      events={events}
       onExit={() => {
         window.location.hash = "";
         setSid(null);

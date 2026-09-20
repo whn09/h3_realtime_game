@@ -294,6 +294,13 @@ class Beat(BaseModel):
     ir_violations: list[str] = Field(default_factory=list)
 
     keyframe_url: str | None = None
+    # The exact sentence that produced `keyframe_url`. Kept next to the image
+    # because this is the only place in a run where a face is decided from words
+    # rather than inherited from the previous frame, so "why does she look
+    # different after the cut" is a question about this string and nothing else.
+    # It was only ever logged, which puts it in a different machine's journal from
+    # the picture it explains.
+    keyframe_prompt: str = ""
     video_url: str | None = None
     poster_url: str | None = None
     last_frame_url: str | None = None
@@ -349,6 +356,12 @@ class Session(BaseModel):
     genre: str = ""
     pov: Pov = "third"
     bible: WorldBible | None = None
+    # What `_ensure_playable` had to invent because the Worldsmith left it out.
+    # Persisted rather than only logged: these are the reasons a session behaves
+    # unlike its premise -- default stats instead of world-specific ones, a face
+    # with no English description to re-draw it from -- and they are unfindable in
+    # a log file an hour later, next to the one session out of forty they explain.
+    bible_notes: list[str] = Field(default_factory=list)
     opening_keyframe_url: str | None = None
     beats: dict[str, Beat] = Field(default_factory=dict)
     root_id: str | None = None
