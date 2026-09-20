@@ -79,6 +79,14 @@ class Runtime:
     # Beats whose Director call is in flight, so a second caller can *wait* for
     # the expansion instead of returning early -- see `_expand`.
     expanding: dict[str, asyncio.Event] = field(default_factory=dict)
+    # The same trick for `_prepare`. Needed for a different reason than
+    # `expanding`: `prepare:{id}` and `produce:{id}` are distinct `_spawn` keys,
+    # so the idempotence guard there does not see them as the same work, and the
+    # cursor can advance onto a beat whose prepare is still running. Without a
+    # join, that beat pays for a second Haiku call and a second SD3.5 image --
+    # and then one of the two images loses the race to set `keyframe_path`, so it
+    # is not just waste but a picture that nothing points at.
+    preparing: dict[str, asyncio.Event] = field(default_factory=dict)
     tasks: set[asyncio.Task] = field(default_factory=set)
 
     def frame_event(self, beat_id: str) -> asyncio.Event:
@@ -274,6 +282,31 @@ class Engine:
                 # and arriving at it will retry the expansion on the slow path.
                 log.warning("look-ahead expand of %s failed: %s", child_id, res)
 
+        # Depth 2, but only the parts that cost no GPU: compile the grandchildren's
+        # IR, and draw the keyframe for the ones that already know they open on a
+        # cut. The expansion that made them exist just happened in the loop above.
+        #
+        # This is the same argument as the Director look-ahead, applied one step
+        # further. PromptIR and the image model read `intent` and `state_after` and
+        # nothing else -- no video, no last frame -- so they can run as soon as
+        # `_make_child` has run, which for a grandchild is now. Doing them here
+        # rather than inside `_produce` takes max(4.5s, 6.3s) off the critical path
+        # of the beat the player is about to choose, which is the whole of the
+        # difference between a beat and the 14.375s it has to fit in.
+        #
+        # Deliberately *not* `pregen_depth >= 2`, and the distinction matters: that
+        # setting is off because six clips against two non-preemptible slots makes
+        # the player wait behind speculation. Nothing here takes a slot. The cost
+        # is Bedrock calls on branches that are never played, which is money and
+        # not latency -- so it degrades the bill, never the game.
+        if settings.prepare_ahead:
+            for child_id in children:
+                child = session.beats.get(child_id)
+                if not child:
+                    continue
+                for gc in child.children.values():
+                    self._spawn(rt, f"prepare:{gc}", self._prepare(rt, gc))
+
         if settings.pregen_depth >= 2:
             # Speculative depth-2: pre-generate the children of the branch the
             # Director expects the player to take, covering the choice *after* this
@@ -395,6 +428,105 @@ class Engine:
         self.store.touch(session.id)
         rt.bus.emit("summary.updated", beat_id=beat_id, summary=summary)
 
+    # -- preparing one beat, without the GPU -------------------------------- #
+
+    def _wants_early_keyframe(self, beat: Beat) -> bool:
+        """Whether this beat's opening image can be drawn before its turn comes.
+
+        Only for a beat the Director already marked as opening on a cut (or the
+        opening beat, which has no parent to continue from). A `continuous` beat
+        is excluded because `_conditioning_frame` may rewrite it to `cut` once the
+        parent's drift is known -- 36% of them do -- and that answer does not
+        exist yet. Drawing for it would be a coin flip on a $0.08 image.
+
+        The converse never happens: the rewrite only ever goes continuous -> cut,
+        never back, so a beat that reads `cut` here still reads `cut` at
+        production time and the picture is never wasted.
+        """
+        return beat.intent.transition != "continuous" or not beat.parent_id
+
+    async def _compile_ir(self, rt: Runtime, beat: Beat) -> None:
+        """Compile this beat's IR into `beat.ir`, exactly once.
+
+        A no-op if it is already there, which is what lets `_prepare` and
+        `_produce` both call it unconditionally: whichever runs first pays, the
+        other returns immediately.
+        """
+        if beat.ir is not None:
+            return
+        session = rt.session
+        assert session.bible is not None
+        compiled = await self.promptir.compile(
+            bible=session.bible, state=beat.state_after, intent=beat.intent
+        )
+        beat.ir = compiled.ir
+        beat.ir_source = compiled.source  # type: ignore[assignment]
+        beat.ir_violations = compiled.violations
+        beat.timings.update(compiled.timings)
+        self.store.write_ir(
+            session.id, beat.id, compiled.ir.to_prompt(),
+            {
+                "source": compiled.source,
+                "attempts": compiled.attempts,
+                "violations": compiled.violations,
+                "intent": beat.intent.model_dump(mode="json"),
+            },
+        )
+        rt.bus.emit(
+            "beat.ir", beat_id=beat.id, source=compiled.source,
+            violations=compiled.violations, description=compiled.ir.description,
+        )
+
+    async def _prepare(self, rt: Runtime, beat_id: str) -> None:
+        """Do everything a beat needs except the video: its IR, and its keyframe
+        if that is already decided. Touches no GPU slot.
+
+        Runs for grandchildren of the cursor, two choices out, so that by the time
+        the player picks, the only work left is the 9.9s of H3 -- see
+        `settings.prepare_ahead` for the arithmetic.
+
+        Never calls `_set_status`. The beat stays `planned` throughout, which is
+        what it is: nothing is being generated for it and the UI should not say
+        otherwise. It also keeps `_produce`'s own status guard meaningful, since
+        a prepared beat is indistinguishable from an untouched one as far as
+        scheduling is concerned.
+        """
+        session = rt.session
+        beat = session.beats.get(beat_id)
+        # `planned` and not anything else: a beat already producing, ready, or
+        # failed either does not need this or is past caring.
+        if not beat or beat.status is not BeatStatus.PLANNED:
+            return
+        wants_kf = self._wants_early_keyframe(beat) and not beat.keyframe_path
+        if beat.ir is not None and not wants_kf:
+            return
+        if beat_id in rt.preparing:
+            return
+
+        done = rt.preparing[beat_id] = asyncio.Event()
+        started = time.perf_counter()
+        try:
+            jobs = [self._compile_ir(rt, beat)]
+            if wants_kf:
+                jobs.append(self._fresh_keyframe(rt, beat))
+            for res in await asyncio.gather(*jobs, return_exceptions=True):
+                if isinstance(res, BaseException):
+                    # Not fatal, and not even logged as an error: `_produce` redoes
+                    # whatever is still missing on its own critical path, which is
+                    # exactly the behaviour before this method existed. A failed
+                    # prepare costs the latency it was meant to save, nothing more.
+                    log.warning("prepare of %s fell back to the slow path: %s", beat_id, res)
+            # Recorded so the debug panel can say *why* `beat_wall_ms` is smaller
+            # than the stages inside it. Without this marker a prepared beat looks
+            # like a measurement bug -- 10s total containing a 4.5s compile and a
+            # 6.3s image -- when it is the entire point: this many milliseconds
+            # happened while the player was watching something else.
+            beat.timings["prepared_ahead_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+            self.store.touch(session.id)
+        finally:
+            done.set()
+            rt.preparing.pop(beat_id, None)
+
     # -- producing one beat ------------------------------------------------- #
 
     async def _produce(self, rt: Runtime, beat_id: str, priority: int) -> None:
@@ -402,8 +534,13 @@ class Engine:
         beat = session.beats.get(beat_id)
         if not beat or beat.status in (BeatStatus.READY, BeatStatus.GENERATING):
             return
+        # The cursor can arrive on a beat whose `_prepare` is still in flight.
+        # Joining it is strictly better than racing it: the work is the work either
+        # way, and duplicating it would also fork `keyframe_path`.
+        in_prepare = rt.preparing.get(beat_id)
+        if in_prepare is not None:
+            await in_prepare.wait()
         assert session.bible is not None
-        bible = session.bible
         started = time.perf_counter()
 
         try:
@@ -416,31 +553,18 @@ class Engine:
             # against a transition that is about to change would produce an IR
             # promising to continue a shot it is actually cutting away from.
             kf_task: asyncio.Task[str] | None = None
-            if beat.intent.transition != "continuous" or not beat.parent_id:
+            if self._wants_early_keyframe(beat) and not _have_keyframe(beat):
                 kf_task = asyncio.create_task(self._fresh_keyframe(rt, beat))
 
             # 1. compile the IR ------------------------------------------------
-            self._set_status(rt, beat, BeatStatus.COMPILING)
-            compiled = await self.promptir.compile(
-                bible=bible, state=beat.state_after, intent=beat.intent
-            )
-            beat.ir = compiled.ir
-            beat.ir_source = compiled.source  # type: ignore[assignment]
-            beat.ir_violations = compiled.violations
-            beat.timings.update(compiled.timings)
-            self.store.write_ir(
-                session.id, beat.id, compiled.ir.to_prompt(),
-                {
-                    "source": compiled.source,
-                    "attempts": compiled.attempts,
-                    "violations": compiled.violations,
-                    "intent": beat.intent.model_dump(mode="json"),
-                },
-            )
-            rt.bus.emit(
-                "beat.ir", beat_id=beat.id, source=compiled.source,
-                violations=compiled.violations, description=compiled.ir.description,
-            )
+            # Both of these are usually already done by `_prepare`, in which case
+            # the beat goes straight from `planned` to `queued`. The status is only
+            # announced when there is really something to wait for, so `compiling`
+            # in the UI keeps meaning "a model is running".
+            if beat.ir is None:
+                self._set_status(rt, beat, BeatStatus.COMPILING)
+            await self._compile_ir(rt, beat)
+            assert beat.ir is not None
 
             # 2. conditioning frame -------------------------------------------
             first_frame = await self._conditioning_frame(rt, beat, kf_task)
@@ -461,7 +585,7 @@ class Engine:
             self._set_status(rt, beat, BeatStatus.QUEUED, priority=priority)
             req = gpu.GpuRequest(
                 job_id=f"{session.id}-{beat.id}",
-                ir=compiled.ir,
+                ir=beat.ir,
                 seconds=settings.beat_seconds,
                 first_frame=first_frame,
                 first_frame_remote=first_frame_remote,
@@ -550,9 +674,16 @@ class Engine:
                 )
                 beat.intent.transition = "cut"
 
-        # Either the task `_produce` started before compiling, or -- for a beat
-        # that only just discovered it has to cut -- one generated now, serially.
-        return await (kf_task or self._fresh_keyframe(rt, beat))
+        # Three ways to have an opening image, in descending order of how early it
+        # was started: a task `_produce` launched before compiling, one `_prepare`
+        # finished two choices ago, or -- for a beat that only just discovered it
+        # has to cut -- one generated now, serially, on the critical path.
+        if kf_task:
+            return await kf_task
+        if _have_keyframe(beat):
+            assert beat.keyframe_path is not None
+            return beat.keyframe_path
+        return await self._fresh_keyframe(rt, beat)
 
     async def _fresh_keyframe(self, rt: Runtime, beat: Beat) -> str:
         """Generate this beat's own opening image and return its local path.
@@ -588,6 +719,7 @@ class Engine:
             seed=abs(hash(beat.id)) % 2_147_483_647,
         )
         beat.keyframe_url = frame.url
+        beat.keyframe_path = str(frame.path)
         beat.timings["keyframe_ms"] = frame.elapsed_ms
         # Same reason as the last-frame prefetch in `_produce`: when this ran
         # concurrently with the IR there is real time left before generation, and
@@ -787,6 +919,18 @@ class Engine:
             for task in list(rt.tasks):
                 task.cancel()
         await asyncio.sleep(0)
+
+
+def _have_keyframe(beat: Beat) -> bool:
+    """Whether this beat's own opening image is on disk and usable *now*.
+
+    The `exists` check is not paranoia. The path can be recorded and the file be
+    gone in two ordinary cases: a session resumed after `ASSETS_DIR` was cleared,
+    and a prepared keyframe outliving a restart of this process. Returning True
+    for either would hand a missing path to the uploader, which fails the beat --
+    where re-drawing costs 6.3s and works.
+    """
+    return bool(beat.keyframe_path) and Path(beat.keyframe_path or "").exists()
 
 
 # --------------------------------------------------------------------------- #

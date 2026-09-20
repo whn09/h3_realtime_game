@@ -139,6 +139,33 @@ class Settings:
     # branch 2, depth 1 is exactly saturating and depth 2 is 3x oversubscribed.
     # Raise this when there are more replicas, not before.
     pregen_depth: int = field(default_factory=lambda: _env_int("PREGEN_DEPTH", 1))
+    # Compile the IR -- and draw the keyframe, where it is already decided -- for
+    # beats two levels out, *without* queueing them for the GPU.
+    #
+    # Not a weaker `pregen_depth`; a different resource. Depth 2 fails because it
+    # oversubscribes the one thing that cannot be shared: 6 clips against 2
+    # non-preemptible slots. This touches no slot at all. It moves the two Bedrock
+    # calls that gate a beat off the critical path, and the arithmetic says they
+    # are the whole of the overshoot. Measured over 73 beats:
+    #
+    #   playback window                                        14.375s
+    #   a fresh beat   max(promptir 4.5, keyframe 6.3) + gpu 9.9 = 16.2s
+    #   a continuous beat        promptir 4.5 + gpu 9.9         = 14.4s
+    #
+    # Both are at or over the window, which is the stall at the end of a clip.
+    # With the IR and the keyframe already in hand only the GPU's 9.9s is left,
+    # and the window has 4.5s of slack for the first time.
+    #
+    # The justification is the same one `_ensure_frontier` already makes for the
+    # Director look-ahead: both depend on the beat's `intent` and `state_after`,
+    # which exist the moment `_make_child` runs, and on nothing about its video.
+    #
+    # It is not free. Four grandchildren are prepared per cursor move and at most
+    # half are ever played, so PromptIR calls roughly double (Haiku, ~440 output
+    # tokens -- noise) and SD3.5 images roughly double (~$0.08 each -- the real
+    # cost). Turn it off with PREPARE_AHEAD=0 if the image bill matters more than
+    # the 4.5-6.3s.
+    prepare_ahead: bool = field(default_factory=lambda: _env_bool("PREPARE_AHEAD", True))
     branch_count: int = field(default_factory=lambda: _env_int("BRANCH_COUNT", 2))
     # Force a re-anchoring cut at least this often, independent of measured
     # drift. chain_drift.py replaces this guess with a measurement.

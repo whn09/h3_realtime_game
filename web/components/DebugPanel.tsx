@@ -71,6 +71,12 @@ const STAGES: { key: string; label: string; hint?: string; total?: boolean }[] =
   { key: "gpu_postprocess_ms", label: "本地后处理", hint: "ffmpeg 抽帧/探测" },
   { key: "gpu_total_ms", label: "GPU 段合计", total: true },
   { key: "beat_wall_ms", label: "这一拍总墙钟", total: true },
+  {
+    key: "prepared_ahead_ms",
+    label: "其中提前做掉",
+    hint: "两次选择之前就编译好的 IR / 画好的关键帧，不占这一拍的墙钟",
+    total: true,
+  },
 ];
 
 const KNOWN = new Set(STAGES.map((s) => s.key));

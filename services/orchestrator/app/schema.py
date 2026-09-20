@@ -301,6 +301,14 @@ class Beat(BaseModel):
     # It was only ever logged, which puts it in a different machine's journal from
     # the picture it explains.
     keyframe_prompt: str = ""
+    # The same image on local disk. `keyframe_url` is what a browser fetches;
+    # this is what gets uploaded to the GPU box as the conditioning frame, and it
+    # has to be persisted separately because the two are only interconvertible by
+    # knowing how the asset server maps paths to URLs. It exists so a keyframe
+    # drawn ahead of time (`_prepare`) is still findable by the `_produce` that
+    # eventually needs it -- without it, preparing one would draw an image and
+    # then throw away the only reference to it.
+    keyframe_path: str | None = None
     video_url: str | None = None
     poster_url: str | None = None
     last_frame_url: str | None = None
