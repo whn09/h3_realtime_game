@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createSession, getPresets, listSessions } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { createSession, deleteSession, getPresets, listSessions } from "@/lib/api";
 import type { Preset, SessionSummary } from "@/lib/types";
 import History from "./History";
 
@@ -52,6 +52,15 @@ export default function Setup({ onCreated, onResume }: Props) {
   }, []);
 
   const selected = presets.find((p) => p.id === presetId);
+
+  // Drop the row only after the orchestrator says it is gone, so a failure leaves
+  // the list honest rather than showing a run that is still on disk. The call is
+  // fast (it cancels tasks and unlinks directories, nothing network-bound), so
+  // there is no wait worth hiding with an optimistic removal.
+  const onDelete = useCallback(async (sid: string) => {
+    await deleteSession(sid);
+    setHistory((rows) => rows.filter((r) => r.id !== sid));
+  }, []);
 
   const submit = async () => {
     if (busy) return;
@@ -149,7 +158,9 @@ export default function Setup({ onCreated, onResume }: Props) {
 
       {/* Last, not first: a returning player scrolls to it, while a new one is
           not asked to walk past a list of runs that are not theirs. */}
-      {history.length > 0 ? <History rows={history} onResume={onResume} /> : null}
+      {history.length > 0 ? (
+        <History rows={history} onResume={onResume} onDelete={onDelete} />
+      ) : null}
     </div>
   );
 }

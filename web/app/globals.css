@@ -217,12 +217,20 @@ button:disabled {
   gap: 8px;
 }
 
+.hrow-wrap {
+  position: relative;
+}
+
 .hrow {
   display: grid;
   grid-template-columns: 72px 1fr;
   align-items: center;
   gap: 12px;
   padding: 8px;
+  /* Room on the right for the delete control, which is absolutely positioned and
+     so would otherwise sit on top of the last of the meta chips. */
+  padding-right: 42px;
+  width: 100%;
   text-align: left;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -233,6 +241,90 @@ button:disabled {
 .hrow:hover {
   border-color: rgba(216, 180, 106, 0.5);
   background: rgba(216, 180, 106, 0.06);
+}
+
+/* ------------------------------------------------------------ history: 删除 */
+
+/* Idle state is nearly invisible and only comes up on hover or keyboard focus.
+   The row's job is to be recognised and clicked; a red × at full contrast on
+   every row would make a list of saved stories look like a list of problems.
+   It stays reachable without a pointer because `:focus-within` on the wrapper
+   catches the tab stop. */
+.hdel {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  line-height: 1;
+  border-radius: 50%;
+  color: var(--dim);
+  opacity: 0;
+  transition: opacity 0.16s, color 0.16s, background 0.16s;
+}
+
+.hrow-wrap:hover .hdel,
+.hrow-wrap:focus-within .hdel,
+.hdel:focus-visible {
+  opacity: 1;
+}
+
+.hdel:hover {
+  color: var(--bad);
+  background: rgba(212, 105, 106, 0.16);
+}
+
+/* A touch device never hovers, so reveal-on-hover would leave the control
+   permanently invisible. Shown dimly instead -- the two-step confirm is what
+   protects against a fat-finger tap, not the button being hard to find. */
+@media (hover: none) {
+  .hdel {
+    opacity: 0.55;
+  }
+}
+
+/* The armed state overlays the row's right-hand end rather than pushing the
+   layout: it needs ~180px that the row does not have, and reserving that much
+   permanently would squeeze the logline on every row to make space for a state
+   that is almost never on screen. Hence its own backdrop -- it is covering the
+   last of the meta chips while it is up. */
+.hdel-confirm,
+.hdel-busy {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  border-radius: 999px;
+  background: rgba(12, 12, 16, 0.93);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+}
+
+.hdel-confirm {
+  border-color: rgba(212, 105, 106, 0.45);
+}
+
+.hdel-yes {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.hdel-no {
+  color: var(--dim);
+}
+
+.hdel-no:hover {
+  color: var(--ink);
 }
 
 .hthumb {

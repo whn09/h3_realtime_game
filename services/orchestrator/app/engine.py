@@ -722,6 +722,32 @@ class Engine:
         self._spawn(rt, f"frontier:{beat.id}", self._ensure_frontier(rt))
         return beat
 
+    async def delete(self, sid: str) -> bool:
+        """Cancel everything this session has running, then erase it.
+
+        Order matters. A session being deleted can easily have two clips on the
+        GPUs and a Director call in flight, and every one of those tasks ends by
+        writing to the document and touching the store -- so deleting the files
+        first just means they come back, written by a task that does not know its
+        session is gone.
+
+        The cancellation is not awaited to completion, and deliberately so: a beat
+        already handed to a replica takes up to 9s to come back, and the player who
+        clicked delete is not waiting for that. `_produce` releases its slot in a
+        `finally`, so the GPU is freed either way; what the cancelled task will
+        find, if it gets far enough to write, is a session missing from the cache,
+        and `store.touch` on an uncached id is a no-op. One `sleep(0)` to let each
+        cancellation actually be delivered before the runtime disappears.
+        """
+        rt = self.runtimes.pop(sid, None)
+        if rt is not None:
+            for task in list(rt.tasks):
+                task.cancel()
+            await asyncio.sleep(0)
+        existed = self.store.delete(sid)
+        self.hub.drop(sid)
+        return existed
+
     # -- introspection ------------------------------------------------------ #
 
     async def health(self) -> dict[str, object]:

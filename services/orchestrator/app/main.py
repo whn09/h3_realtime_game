@@ -179,6 +179,19 @@ async def get_session(sid: str, request: Request) -> dict[str, Any]:
     return session_view(session)
 
 
+@app.delete("/sessions/{sid}")
+async def delete_session(sid: str, request: Request) -> dict[str, Any]:
+    """Erase a session and everything it rendered.
+
+    Idempotent: deleting a session that is already gone answers 200, not 404. The
+    frontend removes the row optimistically, so a retry after a dropped response
+    is deleting something it can no longer see, and a 404 there would surface as
+    an error for an operation that in fact succeeded.
+    """
+    existed = await _engine(request).delete(sid)
+    return {"deleted": sid, "existed": existed}
+
+
 @app.post("/sessions/{sid}/choose")
 async def choose(sid: str, body: ChooseRequest, request: Request) -> dict[str, Any]:
     try:

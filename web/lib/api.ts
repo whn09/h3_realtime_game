@@ -60,6 +60,19 @@ export const listSessions = () =>
 
 export const getSession = (sid: string) => call<SessionView>(`/sessions/${sid}`);
 
+/**
+ * Erase a run: the session document, its IR archive, its event log, and every
+ * clip and keyframe it rendered. No undo, and deliberately no soft-delete --
+ * the clips are the entire point of the button (roughly 10MB per beat, and a
+ * browsed-around tree keeps the branches nobody watched), so hiding the row
+ * while leaving them on disk would be a button that does nothing measurable.
+ *
+ * Idempotent: deleting a run that is already gone answers 200, so a retry after
+ * a dropped response is not an error.
+ */
+export const deleteSession = (sid: string) =>
+  call<{ deleted: string; existed: boolean }>(`/sessions/${sid}`, { method: "DELETE" });
+
 export const createSession = (body: {
   premise?: string;
   genre?: string;

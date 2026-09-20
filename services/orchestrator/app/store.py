@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import shutil
 import time
 from pathlib import Path
 
@@ -26,6 +28,10 @@ from .schema import Session
 log = logging.getLogger("h3game.store")
 
 _FLUSH_DELAY_S = 0.5
+
+# What `create_session` can produce, loosened to any of the same characters so a
+# hand-made id from a test still works. Notably excludes `/`, `.` and `~`.
+_SID_OK = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 class Store:
@@ -94,6 +100,65 @@ class Store:
             return None
         self._cache[sid] = session
         return session
+
+    def delete(self, sid: str) -> bool:
+        """Erase a session: the document, its IR archive, its event log, and every
+        rendered byte it produced.
+
+        Three separate trees, because assets are laid out for serving rather than
+        for deletion:
+
+        * `DATA_DIR/sessions/<sid>/`   -- session.json, ir/, events.jsonl
+        * `ASSETS_DIR/<sid>/`          -- keyframes (keyframe.py names them by sid)
+        * `ASSETS_DIR/_h3/<sid>-*/`    -- the clips, one directory per beat, named
+          by the GPU job id `f"{sid}-{beat.id}"`. `_fake/` for the ffmpeg backend.
+          Globbing the prefix also catches the `-r` degraded retakes, which is the
+          point: they are the same beat's earlier takes and nothing else refers to
+          them.
+
+        The clips are the whole reason this exists. A session document is a few KB;
+        its clips are ~10MB per beat, and a browsed-around tree keeps the branches
+        nobody watched. Deleting the row and leaving those behind would make the
+        button a lie -- the disk would never go down.
+
+        Dropped from the in-memory caches first, and discarded from `_dirty`
+        before any file is touched: the flusher runs every 0.5s and a pending write
+        would otherwise recreate `session.json` moments after it was removed, which
+        is a session that exists on disk but is gone from every cache.
+        """
+        # The id arrives from a URL path segment and every path below is built by
+        # joining it, so this is the one place in the service where an unchecked
+        # `sid` would be an `rmtree` on a caller-chosen directory: `".."` alone
+        # resolves `session_dir` to DATA_DIR itself. Real ids are
+        # `<unix-seconds>-<6 hex>`; nothing outside this alphabet has ever been one.
+        if not sid or not _SID_OK.fullmatch(sid):
+            log.warning("refusing to delete implausible session id %r", sid[:80])
+            return False
+
+        self._dirty.discard(sid)
+        self._cache.pop(sid, None)
+        self._locks.pop(sid, None)
+
+        doc_dir = self.session_dir(sid)
+        existed = doc_dir.exists()
+        targets = [doc_dir, settings.assets_dir / sid]
+        for pool in ("_h3", "_fake"):
+            base = settings.assets_dir / pool
+            if base.is_dir():
+                targets += sorted(base.glob(f"{sid}-*"))
+
+        for path in targets:
+            if not path.exists():
+                continue
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                # Keep going. A half-deleted session is worse than one that lost a
+                # single directory, and the caller has already been told it is
+                # gone -- it is out of every cache and out of `list_sessions`.
+                log.error("deleting %s: could not remove %s: %s", sid, path, exc)
+        log.info("deleted session %s (%d paths)", sid, len(targets))
+        return existed
 
     def list_sessions(self, limit: int = 50) -> list[dict[str, object]]:
         rows = []

@@ -109,3 +109,15 @@ class EventHub:
             path = self.root / "sessions" / session_id / "events.jsonl"
             self._buses[session_id] = SessionBus(session_id, path)
         return self._buses[session_id]
+
+    def drop(self, session_id: str) -> None:
+        """Forget a deleted session's bus.
+
+        Subscribers are left alone rather than woken: an SSE stream still open on
+        a session whose files just went away has nothing useful left to receive,
+        and its next poll of the document returns 404, which is what the frontend
+        already knows how to handle. Dropping the bus matters for a different
+        reason -- it holds the tail of `events.jsonl` in memory, and keeping it
+        would resurrect a deleted session's history if a new session ever reused
+        the id."""
+        self._buses.pop(session_id, None)
