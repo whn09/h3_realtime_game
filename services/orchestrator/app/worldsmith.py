@@ -38,6 +38,7 @@ class WorldsmithOutput(BaseModel):
     genre: str = ""
     logline: str = ""
     style_anchor: str = ""
+    style_anchor_en: str = ""
     music_bible: str = ""
     ambience: str = ""
     pov: str = "third"
@@ -175,6 +176,10 @@ def _ensure_playable(out: WorldsmithOutput) -> list[str]:
                 appearance="三十岁上下，短发被风吹乱，眉骨有一道旧疤，中等身材；"
                            "穿深灰色厚布外套，袖口磨损，脖颈围着一条褪色的靛蓝围巾，"
                            "左肩挎一只帆布背包，背包带上系着一枚黄铜哨子。",
+                appearance_en="around thirty, short wind-tossed dark hair, old scar "
+                              "through the eyebrow, medium build, worn dark grey heavy "
+                              "cloth coat with frayed cuffs, faded indigo scarf, canvas "
+                              "satchel on the left shoulder, brass whistle on the strap",
                 voice="低沉、气息偏重",
                 arc="从独行到不得不依靠别人",
             )
@@ -191,6 +196,19 @@ def _ensure_playable(out: WorldsmithOutput) -> list[str]:
 
     if out.pov not in ("first", "third"):
         out.pov = "third"
+
+    # The three English fields cannot be repaired -- translating them here would
+    # need another model call on the one path the player waits through, and a
+    # machine translation of a prompt is not a prompt. So a missing one is recorded
+    # and the keyframe falls back to what it did before: fewer constraints on the
+    # image, and the same face lottery at every cut. Recorded rather than silent
+    # because that is a quality regression nobody would otherwise see -- it looks
+    # like the image model having a bad day.
+    missing_en = [c.name for c in out.characters if not c.appearance_en.strip()]
+    if missing_en:
+        notes.append(f"角色缺少英文外观（appearance_en）：{'、'.join(missing_en)}，重锚帧会少一层约束")
+    if not out.style_anchor_en.strip():
+        notes.append("缺少 style_anchor_en，关键帧只能退回用中文风格锚点")
 
     if not out.stat_names:
         out.stat_names = list(_DEFAULT_STATS)
@@ -282,6 +300,7 @@ class Worldsmith:
             genre=out.genre or genre_hint,
             logline=out.logline,
             style_anchor=out.style_anchor,
+            style_anchor_en=out.style_anchor_en,
             music_bible=out.music_bible,
             ambience=out.ambience,
             pov="first" if out.pov == "first" else "third",

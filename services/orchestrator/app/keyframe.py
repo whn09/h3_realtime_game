@@ -30,6 +30,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import settings
+# One rule decides who is on screen, shared with the video prompt: the characters
+# whose appearance goes into the IR are exactly the ones whose appearance goes
+# into the keyframe, or the two prompts describe different casts.
+from .promptir import characters_in_shot
 from .schema import ShotSpec, WorldBible, WorldState
 
 log = logging.getLogger("h3game.keyframe")
@@ -58,23 +62,42 @@ class Keyframe:
 
 
 def build_prompt(bible: WorldBible, shot: ShotSpec, state: WorldState) -> str:
-    """Compose an English image prompt.
+    """Compose the image prompt for a fresh keyframe.
 
-    English on purpose: the image models are measurably more literal with English,
-    and this prompt never reaches H3, so there is no consistency cost to switching
-    languages here.
+    This is the frame that decides who the characters *are* for the next stretch
+    of the film. Every other beat inherits its first frame from the previous
+    clip, so a face only ever changes here -- which is why the appearance goes in
+    even though it costs prompt length, and why it goes in ahead of the style
+    anchor: the CLIP encoders see roughly the first 77 tokens and nothing after.
+    It was missing entirely before, so a cut could hand the player a different
+    person in the same coat.
+    English where we have English. `appearance_en` and `style_anchor_en` are
+    authored once by the Worldsmith precisely so this prompt can be, because the
+    image model is measurably more literal with it. The shot fields stay in
+    Chinese: the Director writes them per beat, and translating them would mean
+    another model call inside the beat budget. Mixed, then, rather than the
+    previous state of affairs -- a function whose docstring claimed English while
+    passing a ~130-character Chinese style anchor to CLIP.
     """
+    on_screen = characters_in_shot(bible, shot)
+    who = [c.appearance_en.strip() for c in on_screen if c.appearance_en.strip()]
     parts = [
         _CAMERA_EN.get(shot.type, "medium shot"),
         shot.subject,
+        # Named before described, so that even under truncation the subject
+        # survives; the descriptions are what the extra length buys.
+        *who,
         shot.setting or state.location,
         state.time_of_day,
         shot.mood,
-        bible.style_anchor,
+        bible.style_anchor_en or bible.style_anchor,
         bible.genre,
         "cinematic still frame, 16:9, no text",
     ]
-    return ", ".join(p.strip() for p in parts if p and p.strip())[:1000]
+    # 2000, matching what `_invoke_stability` actually sends. The old 1000 predates
+    # the appearances and would now cut the style anchor off the end -- truncating
+    # the very thing the last argument of this function exists to preserve.
+    return ", ".join(p.strip() for p in parts if p and p.strip())[:2000]
 
 
 class Keyframer:

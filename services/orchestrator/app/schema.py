@@ -61,6 +61,17 @@ class Character(BaseModel):
     # forbidden from rewriting it; that verbatim reuse is the main defence
     # against character drift (DESIGN.md section 3.3).
     appearance: str
+    # The same appearance in English, for the image model and only the image
+    # model. Two languages rather than one translation at call time because the
+    # two consumers are genuinely different: H3 reads the Chinese IR, and Bedrock's
+    # SD3.5 is measurably more literal with English -- and a keyframe is the one
+    # frame in a beat that has no previous frame to inherit a face from, so it is
+    # exactly where a diluted prompt costs an identity.
+    #
+    # Empty is tolerated: nothing here can translate, so a bible that omits it
+    # degrades to the pre-existing behaviour (the name alone) rather than to a
+    # half-Chinese prompt.
+    appearance_en: str = ""
     voice: str = ""
     arc: str = ""
 
@@ -101,6 +112,13 @@ class WorldBible(BaseModel):
     # Frozen visual grammar (film stock, lens, lighting ratio, palette),
     # injected verbatim into every IR.
     style_anchor: str = ""
+    # The same grammar in English, for the image model. `build_prompt` used to
+    # inject the Chinese anchor into a prompt whose docstring says it is English on
+    # purpose, which is the worst of both: SD3.5's encoders get ~130 characters
+    # they largely cannot use, and they get them in the slot where the visual style
+    # was supposed to be pinned. Falls back to the Chinese one when absent, since
+    # that is no worse than what it replaced.
+    style_anchor_en: str = ""
     # Frozen musical grammar (BPM, key, instrumentation, emotional baseline).
     music_bible: str = ""
     ambience: str = ""

@@ -566,7 +566,21 @@ class Engine:
         session = rt.session
         assert session.bible is not None
 
-        prompt = kf.build_prompt(session.bible, beat.intent.shot, beat.state_after)
+        # The opening has a prompt written for it. `opening_keyframe_prompt` is
+        # 70-130 English words the Worldsmith composed for this one frame, with the
+        # whole bible in front of it -- and it was being thrown away in favour of
+        # the generic assembly below, on the single frame the player stares at
+        # while the first clip renders. The generic path is still the fallback,
+        # since nothing guarantees the field came back.
+        opening_prompt = session.bible.opening_keyframe_prompt.strip()
+        if beat.index == 0 and opening_prompt:
+            prompt = f"{opening_prompt}, cinematic still frame, 16:9, no text"[:2000]
+        else:
+            prompt = kf.build_prompt(session.bible, beat.intent.shot, beat.state_after)
+        # Logged because this is the only place a face is decided, and "why does
+        # she look different after the cut" is otherwise unanswerable after the
+        # fact: the image is on disk but the sentence that produced it is not.
+        log.info("keyframe prompt for %s: %s", beat.id, prompt)
         frame = await self.keyframer.generate(
             session.id, f"kf-{beat.id}", prompt,
             seed=abs(hash(beat.id)) % 2_147_483_647,
