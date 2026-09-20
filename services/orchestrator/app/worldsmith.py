@@ -51,6 +51,24 @@ class WorldsmithOutput(BaseModel):
     opening_keyframe_prompt: str = ""
 
 
+# The opening premises. Each one is deliberately built the same way, because the
+# Worldsmith is only as good as the corner it is pushed into and these four
+# ingredients are what stop it from writing a synopsis:
+#
+#   1. A place with a look. "被积雪掩埋的城市" gives the keyframe model and H3
+#      something to agree on; "一个奇怪的世界" gives them nothing and they
+#      disagree, which is visible as a cut that does not match.
+#   2. A problem already in progress, not one about to start. The first shot is
+#      14.4 seconds long -- there is no room for the protagonist to decide to
+#      begin.
+#   3. Something scarce and countable (三天的口粮, 电量将尽). This is where the
+#      Worldsmith's `stat_names` come from; without it every world gets 体力/决心.
+#   4. Second person, because the POV default is third and the contrast is what
+#      tells the Worldsmith the player is the one in the frame.
+#
+# Twelve rather than four: a preset is the whole of the setup screen for most
+# players -- the free-text box is a second click most never make -- so the grid is
+# the actual genre range of the product. They are ordered roughly familiar-first.
 PRESETS = [
     {
         "id": "apocalypse",
@@ -78,6 +96,62 @@ PRESETS = [
         "premise": "你驾驶一艘单人潜水器下潜到四千米，任务是回收一台失联的观测站，"
                    "但声呐上多出了一个不该存在的回波。",
         "genre": "深海科幻",
+    },
+    {
+        "id": "wuxia",
+        "title": "武侠",
+        "premise": "你在雨夜的渡口等一条不会来的船，怀里揣着一封没有署名的信。"
+                   "岸上的客栈里，有七个人今晚都想让你死。",
+        "genre": "江湖武侠",
+    },
+    {
+        "id": "cyberpunk",
+        "title": "赛博朋克",
+        "premise": "你是个卖记忆的二手贩子。今天收来的一段记忆里，"
+                   "有人正用你的脸、你的声音，在一间你从没进过的房间里签下一份文件。",
+        "genre": "赛博朋克",
+    },
+    {
+        "id": "republic",
+        "title": "民国",
+        "premise": "一九三四年的深秋，你受雇去一栋停摆的洋楼里取一只箱子。"
+                   "看门人说楼里没人，可三楼的留声机整夜都在放同一首曲子。",
+        "genre": "民国怪谈",
+    },
+    {
+        "id": "noir",
+        "title": "黑色侦探",
+        "premise": "雨水顺着你办公室的窗往下淌。一个不肯报姓名的女人放下一叠钞票，"
+                   "只要你查一个已经死了三年的人现在住在哪里。",
+        "genre": "黑色电影",
+    },
+    {
+        "id": "space",
+        "title": "星际",
+        "premise": "你在一艘缓慢自转的货运飞船上值最后一班夜岗，全员还有十一个月才醒。"
+                   "刚才，有人从内侧敲了三下气闸。",
+        "genre": "太空科幻",
+    },
+    {
+        "id": "western",
+        "title": "西部",
+        "premise": "你骑着一匹跛了的马进镇，水壶是空的，通缉令上是你的脸。"
+                   "镇上唯一的水井被一个坐在摇椅上的老人看着。",
+        "genre": "西部片",
+    },
+    {
+        "id": "folkhorror",
+        "title": "乡野怪谈",
+        "premise": "你回到二十年没回过的山村替祖父下葬，村口的红纸写着你的名字。"
+                   "全村人都来了，没有一个人看你的眼睛。",
+        "genre": "民俗恐怖",
+    },
+    {
+        "id": "steampunk",
+        "title": "蒸汽朋克",
+        "premise": "你是这座齿轮之城最后一个会修老钟的人。市政厅的大钟昨夜停在三点十七分，"
+                   "而全城的人都还记得那一刻自己在做什么——除了你。",
+        "genre": "蒸汽朋克",
     },
 ]
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 /**
  * A fixed pool of three `<video>` elements that are mounted once and never
@@ -59,6 +59,37 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
   const visible = useRef<string | null>(null);
   const useCount = useRef(0);
   const lastUsed = useRef<number[]>([0, 0, 0]);
+
+  /**
+   * Stop and release every element when the stage goes away.
+   *
+   * Taking a `<video>` out of the document does not stop it. A detached element
+   * with a live `src` keeps decoding and keeps its audio on the output until it is
+   * garbage collected, which is at the engine's convenience -- so leaving a
+   * session left its soundtrack playing underneath the setup screen, and
+   * underneath the *next* session if the player picked one, which is the second
+   * half of the "old one is still playing" report. The first half was
+   * `useSession` handing over a stale document; this is why it could still be
+   * heard after that was fixed.
+   *
+   * `removeAttribute("src")` then `load()` is the documented way to make a media
+   * element let go: pausing alone stops the sound but keeps the decoder and the
+   * buffered data, and clearing `src` without `load()` is not guaranteed to
+   * abort the fetch in progress.
+   */
+  useEffect(
+    () => () => {
+      for (const i of SLOTS) {
+        const el = els.current[i];
+        if (!el) continue;
+        el.pause();
+        el.removeAttribute("src");
+        el.removeAttribute("data-src");
+        el.load();
+      }
+    },
+    []
+  );
 
   const assign = (beatId: string, url: string): number => {
     const existing = slotOf.current.get(beatId);
@@ -165,7 +196,13 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
         <video
           key={i}
           ref={(el) => {
-            els.current[i] = el;
+            // Keep the element on detach instead of storing the `null` React
+            // passes. Passive effect cleanup runs *after* refs are detached, so
+            // nulling here would leave the teardown above with nothing to stop --
+            // and a detached-but-playing <video> is precisely what it exists to
+            // silence. Nothing reads these after unmount, so holding a stale
+            // reference for the length of a teardown costs nothing.
+            if (el) els.current[i] = el;
           }}
           className="stage-video"
           style={{ opacity: 0, zIndex: 1 }}

@@ -31,10 +31,32 @@ export interface SessionStore {
 const MAX_EVENT_LOG = 300;
 
 export function useSession(sid: string | null): SessionStore {
-  const [session, setSession] = useState<SessionView | null>(null);
+  /**
+   * The document, tagged with the session it belongs to.
+   *
+   * Tagged rather than bare, and that is the whole point of this shape: the
+   * document used to be plain state, cleared by nothing, so switching runs left
+   * the *previous* session's document in place until the new `GET` came back. For
+   * that window -- one render, then however long the request takes -- `session`
+   * described run A while `sid` said run B, and `Player` mounted against it and
+   * did exactly what it is supposed to do with a session whose cursor has a clip:
+   * played it. That is the "switched stories and the old one was still playing"
+   * report, and it was audible as well as visible because the clip carries its
+   * own score.
+   *
+   * Clearing it in an effect would not have fixed it; effects run after the
+   * render that already handed the stale document to `Player`. So the mismatch is
+   * resolved during render instead: `session` below is `null` unless the document
+   * in hand is the one being asked for, which makes "loading a different run"
+   * indistinguishable from "loading the first run" -- there is no state in which
+   * a caller can be handed someone else's story.
+   */
+  const [loaded, setLoaded] = useState<{ sid: string; doc: SessionView } | null>(null);
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const session = loaded && loaded.sid === sid ? loaded.doc : null;
 
   const lastSeq = useRef(0);
   const seen = useRef<Set<number>>(new Set());
@@ -44,14 +66,23 @@ export function useSession(sid: string | null): SessionStore {
   const reload = useCallback(async () => {
     if (!sid) return;
     try {
-      setSession(await getSession(sid));
+      const doc = await getSession(sid);
+      setLoaded({ sid, doc });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [sid]);
 
-  const apply = useCallback((event: GameEvent) => {
-    setSession((prev) => (prev ? reduce(prev, event) : prev));
+  /**
+   * Patch the document, but only if it is still the one this event came from. A
+   * late event from the previous run's stream -- already closed, but a message can
+   * be in flight past `close()` -- would otherwise be reduced into the new run's
+   * document, inserting a beat that belongs to a different story.
+   */
+  const apply = useCallback((forSid: string, event: GameEvent) => {
+    setLoaded((prev) =>
+      prev && prev.sid === forSid ? { ...prev, doc: reduce(prev.doc, event) } : prev
+    );
   }, []);
 
   useEffect(() => {
@@ -59,6 +90,10 @@ export function useSession(sid: string | null): SessionStore {
     let cancelled = false;
     lastSeq.current = 0;
     seen.current = new Set();
+    // The event log belongs to a session, not to the app. Carrying the previous
+    // run's events into this one makes the debug overlay describe the wrong story.
+    setEvents([]);
+    setError(null);
 
     const connect = () => {
       if (cancelled) return;
@@ -82,7 +117,7 @@ export function useSession(sid: string | null): SessionStore {
         if (seen.current.has(parsed.seq)) return;
         seen.current.add(parsed.seq);
         lastSeq.current = Math.max(lastSeq.current, parsed.seq);
-        apply(parsed);
+        apply(sid, parsed);
         setEvents((prev) => [...prev.slice(-(MAX_EVENT_LOG - 1)), parsed]);
       };
 
@@ -110,9 +145,13 @@ export function useSession(sid: string | null): SessionStore {
   }, [sid, apply, reload]);
 
   const patchBeat = useCallback((id: string, patch: Partial<Beat>) => {
-    setSession((prev) => {
-      if (!prev?.beats[id]) return prev;
-      return { ...prev, beats: { ...prev.beats, [id]: { ...prev.beats[id], ...patch } } };
+    setLoaded((prev) => {
+      if (!prev?.doc.beats[id]) return prev;
+      const doc = prev.doc;
+      return {
+        ...prev,
+        doc: { ...doc, beats: { ...doc.beats, [id]: { ...doc.beats[id], ...patch } } },
+      };
     });
   }, []);
 

@@ -33,11 +33,17 @@ export default function Hud({
   return (
     <div className="hud">
       <div className="hud-left">
-        {/* Leaving abandons nothing: the session is on disk and listed under
-            history, so this is a way back to the shelf, not a quit. */}
-        <button className="hud-title hud-home" onClick={onExit} title="回到开头（这局会留在历史里）">
-          {session.bible?.genre || session.genre || "故事"}
+        {/* An explicit home button, first in the row.
+            Leaving abandons nothing -- the session is on disk and listed under
+            history, so this is a way back to the shelf, not a quit -- but the only
+            way back used to *be* the genre label, which reads as a label and not
+            as a control. A player with no way out that they can see is a player
+            who reloads the tab. So the affordance is now a button that looks like
+            one, and the genre next to it is just text. */}
+        <button className="hud-home" onClick={onExit} title="回到主页（这一局会留在历史记录里）">
+          <span aria-hidden>⌂</span> 主页
         </button>
+        <span className="hud-title">{session.bible?.genre || session.genre || "故事"}</span>
         {state ? (
           <>
             <span className="hud-chip">第 {state.act} 幕</span>

@@ -150,9 +150,12 @@ button:disabled {
   font-size: 12.5px;
   color: var(--dim);
   /* Two lines: enough to tell them apart, not enough to turn the grid into a
-     wall of text the player has to read before they can start. */
+     wall of text the player has to read before they can start. Was three, and
+     went to two when the grid went from 4 presets to 12 -- at that count the
+     third line costs a whole extra row of scrolling to say something the title
+     and genre have already said. */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -620,15 +623,20 @@ button:disabled {
 
 /* ------------------------------------------------------------------ replay */
 
-/* Bottom-left, deliberately out of the way. It shares the held moment with the
+/* Bottom-RIGHT, deliberately out of the way. It shares the held moment with the
    decision cards, and those are the thing the player is supposed to be reading:
    this is an escape hatch for "wait, show me that again", not a call to action.
    Above the cards in z-order all the same, because the overlay's backdrop covers
-   the full stage and would otherwise swallow the click. */
+   the full stage and would otherwise swallow the click.
+
+   Right rather than left because `next dev` parks its own floating indicator in
+   the bottom-left corner and the two overlapped. The dev badge is not in a
+   production build, but a corner a developer cannot click during development is
+   not a usable corner. */
 .replay {
   position: absolute;
   z-index: 10;
-  left: 22px;
+  right: 22px;
   bottom: 22px;
   display: inline-flex;
   align-items: center;
@@ -769,16 +777,37 @@ button:disabled {
 .hud-title {
   letter-spacing: 0.16em;
   margin-right: 6px;
+  color: var(--dim);
 }
 
+/* Reads as a button, unlike the genre label it replaced. Pill-shaped like the
+   other HUD controls on the right, so the two ends of the bar look like the same
+   kind of thing, and `pointer-events: auto` because `.hud` itself is transparent
+   to clicks -- the bar sits over the picture and must not eat drags on it. */
 .hud-home {
   pointer-events: auto;
-  color: inherit;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  letter-spacing: 0.06em;
+  background: rgba(10, 10, 14, 0.5);
+  backdrop-filter: blur(8px);
+  transition: color 0.16s, border-color 0.16s, background 0.16s;
 }
 
 .hud-home:hover {
   color: var(--accent);
+  border-color: rgba(216, 180, 106, 0.55);
+  background: rgba(216, 180, 106, 0.1);
+}
+
+.hud-home span {
+  font-size: 15px;
+  line-height: 1;
 }
 
 .held-note {
