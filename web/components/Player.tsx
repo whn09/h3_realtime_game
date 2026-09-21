@@ -61,6 +61,12 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
   const [busy, setBusy] = useState(false);
   const [waitNote, setWaitNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The decoder is short of data for the clip on screen. Distinct from `waiting`,
+   * which is the *story* waiting on the Director: this one is the network, and the
+   * two want opposite things said to the player.
+   */
+  const [buffering, setBuffering] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -86,6 +92,7 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
     setClipEnded(false);
     setPending(null);
     setWaitNote("");
+    setBuffering(false);
     committing.current = false;
     setBusy(false);
   }, [cursor?.id, cursor?.video_url]);
@@ -367,6 +374,12 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
         // about the story, not about the decoder, and a replay must not cancel
         // them.
         onPlaying={() => setMode((m) => (m === "blocked" ? "watching" : m))}
+        // Surfaced as the normal error toast, verbatim. A player cannot act on
+        // `MEDIA_ERR_DECODE (3) readyState=0`, but they can read it out, and the
+        // alternative -- a picture that silently stops with no explanation
+        // anywhere -- cost an entire debugging session.
+        onMediaError={(beatId, detail) => setError(`视频无法播放（${beatId}）：${detail}`)}
+        onBuffering={(_beatId, on) => setBuffering(on)}
       />
 
       {freezeUrl ? (
@@ -407,6 +420,15 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
           点击继续播放
           <span>浏览器阻止了带声音的自动播放</span>
         </button>
+      ) : null}
+
+      {/* Deliberately small and out of the way -- this is "the picture is about to
+          continue", not a modal. It is also the only honest thing to show while the
+          clip is still arriving over a link that sometimes gives 107KB/s. */}
+      {buffering && !clipEnded && mode !== "blocked" ? (
+        <div className="buffering">
+          <span className="spinner" /> 正在缓冲这一段……
+        </div>
       ) : null}
 
       {mode === "waiting" && shown && !ending ? (

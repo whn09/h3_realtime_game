@@ -985,6 +985,25 @@ button:disabled {
   color: var(--dim);
 }
 
+/* Top-centre, so it cannot collide with the replay button (bottom right), the HUD
+   (bottom left) or the toast (bottom centre). Small on purpose: the picture is the
+   thing, and this only says it is on its way. */
+.buffering {
+  position: absolute;
+  z-index: 10;
+  left: 50%;
+  top: 22px;
+  transform: translateX(-50%);
+  padding: 7px 15px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+}
+
 /* ------------------------------------------------------------------ misc */
 
 .toast {

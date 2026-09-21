@@ -66,6 +66,31 @@ interface Props {
    * parent it had worked.
    */
   onPlaying?: (beatId: string) => void;
+  /**
+   * The element gave up on this clip.
+   *
+   * Nothing used to listen for `error`, and that was the one failure mode the
+   * player could not see through: the fetch reads 200 in devtools, the decoder
+   * rejects the media or the transfer breaks, the element goes quiet, and `show`
+   * is left awaiting a `play()` promise that never settles. On screen that is a
+   * frozen picture with no overlay, no toast, and nothing in the log -- "视频加载
+   * 成功了，但是就是播不出来". The element knows exactly what went wrong; it just
+   * had no way to say so.
+   *
+   * The string is diagnostic, not prose: the browser's own code and message plus
+   * `readyState` / `networkState` / how many bytes it managed to buffer, which is
+   * what distinguishes "this file is not decodable" from "the tunnel died at 40%".
+   */
+  onMediaError?: (beatId: string, detail: string) => void;
+  /**
+   * Playback stopped for want of data (`waiting`/`stalled`), or resumed.
+   *
+   * Worth surfacing here specifically because the clip comes down an ssh tunnel
+   * that has been measured at both 107KB/s and 670KB/s within a minute: at the
+   * bad end a 1.7MB clip cannot arrive in real time, and "it is still loading"
+   * and "it is broken" look identical to the player unless one of them says so.
+   */
+  onBuffering?: (beatId: string, buffering: boolean) => void;
 }
 
 const SLOTS = [0, 1, 2] as const;
@@ -112,8 +137,23 @@ function isAutoplayRefusal(err: unknown): boolean {
   return true;
 }
 
+/** `MediaError.code` -> the constant's name, because the number alone means nothing. */
+const MEDIA_ERR = ["", "ABORTED", "NETWORK", "DECODE", "SRC_NOT_SUPPORTED"] as const;
+
+/** What the element will admit to, in one line. */
+function mediaDetail(el: HTMLVideoElement): string {
+  const err = el.error;
+  const buffered = el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0;
+  const code = err ? `${MEDIA_ERR[err.code] ?? err.code} (${err.code})` : "no MediaError";
+  const msg = err?.message ? ` ${err.message}` : "";
+  return (
+    `${code}${msg} · readyState=${el.readyState} networkState=${el.networkState}` +
+    ` buffered=${buffered.toFixed(1)}s/${Number.isFinite(el.duration) ? el.duration.toFixed(1) : "?"}s`
+  );
+}
+
 const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
-  { onTimeUpdate, onEnded, onBlocked, onPlaying },
+  { onTimeUpdate, onEnded, onBlocked, onPlaying, onMediaError, onBuffering },
   ref
 ) {
   const els = useRef<(HTMLVideoElement | null)[]>([null, null, null]);
@@ -144,11 +184,15 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
    */
   const wanted = useRef<string | null>(null);
 
-  const markFrame = (slot: number) => {
-    hasFrame.current[slot] = true;
+  const wake = (slot: number) => {
     const parked = waiters.current[slot];
     waiters.current[slot] = [];
     for (const resolve of parked) resolve();
+  };
+
+  const markFrame = (slot: number) => {
+    hasFrame.current[slot] = true;
+    wake(slot);
   };
 
   const awaitFrame = (slot: number): Promise<void> =>
@@ -374,7 +418,39 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
             // Buffered slots never play, but a slot that *was* visible can emit a
             // late `playing` as it is being paused; gate on the current beat so a
             // clip leaving the screen cannot speak for the one arriving.
-            if (id && id === visible.current) onPlaying?.(id);
+            if (id && id === visible.current) {
+              onPlaying?.(id);
+              onBuffering?.(id, false);
+            }
+          }}
+          // A slot that has failed will never produce a frame, so anything parked
+          // on one must be let go now rather than sitting out REVEAL_WAIT_MS for a
+          // frame that is not coming. Revealing a failed element is still the right
+          // move: it keeps painting the previous clip's picture, which beats black.
+          onError={(ev) => {
+            const el = ev.currentTarget;
+            const id = beatOf.current[i];
+            wake(i);
+            const detail = mediaDetail(el);
+            // Console too, not only the UI: the toast is one line and the player
+            // may well have clicked it away before telling anyone.
+            console.warn(`[stage] media error on ${id ?? `slot ${i}`}: ${detail}`, el.currentSrc);
+            if (id) onMediaError?.(id, detail);
+          }}
+          // `waiting` = playback stopped because the buffer ran dry. `stalled` =
+          // no data for a while, which on this link happens without playback
+          // having started at all.
+          onWaiting={() => {
+            const id = beatOf.current[i];
+            if (id && id === visible.current) onBuffering?.(id, true);
+          }}
+          onStalled={() => {
+            const id = beatOf.current[i];
+            if (id && id === visible.current) onBuffering?.(id, true);
+          }}
+          onCanPlay={() => {
+            const id = beatOf.current[i];
+            if (id && id === visible.current) onBuffering?.(id, false);
           }}
           onEnded={() => {
             const id = beatOf.current[i];
