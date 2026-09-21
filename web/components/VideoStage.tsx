@@ -16,6 +16,17 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
  * The pool is addressed by beat id, not by slot: callers say "buffer this beat"
  * and "show this beat", and the slot bookkeeping (including eviction, when a
  * player branches faster than the pool turns over) stays in here.
+ *
+ * The other half of "never unmount" is that an element carries its *previous*
+ * clip's picture into its next one. Assigning a new `src` does not clear what the
+ * compositor holds: the element keeps painting the last frame it decoded until
+ * the new media produces one. So revealing a slot the moment its `src` changes
+ * shows the clip that used to live there -- the sibling branch, or the beat
+ * before -- for the handful of frames until the first real frame decodes. That is
+ * the reported "有的时候前几帧是其他画面", and it is a playback artefact only: the
+ * mp4s themselves were checked frame by frame against the image each was
+ * conditioned on (`bench/frame_continuity_check.py`) and every one starts where
+ * it should. Hence `hasFrame` below, and hence `show` waiting on it.
  */
 
 export interface StageHandle {
@@ -60,6 +71,21 @@ interface Props {
 const SLOTS = [0, 1, 2] as const;
 
 /**
+ * How long `show` will hold the outgoing picture waiting for the incoming clip to
+ * have a frame, before revealing it anyway.
+ *
+ * Generous on purpose. What is on screen during the wait is *correct* -- the
+ * previous clip's final frame, which for a continuous beat is pixel-identical to
+ * the image the incoming clip was conditioned on, possibly with the freeze <img>
+ * and 「世界在回应你」 over it -- so waiting costs nothing but a slightly later cut,
+ * while not waiting shows the wrong shot. The clip is ~1.1MB and normally already
+ * buffered, so this bound is only reached when the fetch is genuinely in trouble;
+ * revealing then is the lesser evil, because a black rectangle is worse than a
+ * stale frame that is about to be replaced (DESIGN.md section 7: 绝不黑屏).
+ */
+const REVEAL_WAIT_MS = 4000;
+
+/**
  * Was this `play()` rejection the browser refusing us, or just a newer request
  * cancelling an older one?
  *
@@ -98,6 +124,46 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
   const visible = useRef<string | null>(null);
   const useCount = useRef(0);
   const lastUsed = useRef<number[]>([0, 0, 0]);
+  /**
+   * Does the element in this slot hold a decoded frame of the clip *currently*
+   * assigned to it? Cleared when a new `src` is set and set again on
+   * `loadeddata`, which is the event that means readyState reached
+   * HAVE_CURRENT_DATA -- i.e. there is a frame at the current position. The gap
+   * between those two is the window in which the element still paints the
+   * previous beat, which is the bug this exists to close.
+   */
+  const hasFrame = useRef<boolean[]>([false, false, false]);
+  /** Resolvers for `show` calls parked on a slot's first frame. */
+  const waiters = useRef<(() => void)[][]>([[], [], []]);
+  /**
+   * The id `show` is currently working towards. Distinct from `visible`, which
+   * must keep naming the clip that is actually on screen until the swap really
+   * happens -- otherwise the outgoing clip's `ended` and `timeupdate` are dropped
+   * on the floor while we wait, and the beat that was playing never reports that
+   * it finished.
+   */
+  const wanted = useRef<string | null>(null);
+
+  const markFrame = (slot: number) => {
+    hasFrame.current[slot] = true;
+    const parked = waiters.current[slot];
+    waiters.current[slot] = [];
+    for (const resolve of parked) resolve();
+  };
+
+  const awaitFrame = (slot: number): Promise<void> =>
+    new Promise((resolve) => {
+      if (hasFrame.current[slot]) return resolve();
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, REVEAL_WAIT_MS);
+      waiters.current[slot].push(done);
+    });
 
   /**
    * Stop and release every element when the stage goes away.
@@ -136,14 +202,22 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
       lastUsed.current[existing] = ++useCount.current;
       return existing;
     }
-    // Prefer an empty slot, then the least recently used one that is not on
-    // screen. Evicting the visible slot would blank the picture mid-beat.
+    // Prefer an empty slot, then the least recently used one that is neither on
+    // screen nor about to be. Evicting the visible slot would blank the picture
+    // mid-beat; evicting `wanted` would be worse -- `show` is parked on that
+    // slot's first frame, and it would wake up to a different clip and reveal it.
+    // That matters because the two are briefly different: `show` now holds the
+    // outgoing picture while the incoming clip decodes, and the player's children
+    // start buffering inside that window.
+    const protectedIds = new Set([visible.current, wanted.current].filter(Boolean));
     const free = SLOTS.find((i) => beatOf.current[i] === null);
+    const byAge = (a: number, b: number) => lastUsed.current[a] - lastUsed.current[b];
     const slot =
       free ??
-      SLOTS.filter((i) => beatOf.current[i] !== visible.current).sort(
-        (a, b) => lastUsed.current[a] - lastUsed.current[b]
-      )[0];
+      SLOTS.filter((i) => !protectedIds.has(beatOf.current[i])).sort(byAge)[0] ??
+      // Cannot happen at three slots and at most two protected beats, but a pool
+      // that ever shrinks must still return something rather than `undefined`.
+      SLOTS.filter((i) => beatOf.current[i] !== visible.current).sort(byAge)[0];
 
     const evicted = beatOf.current[slot];
     if (evicted) slotOf.current.delete(evicted);
@@ -154,6 +228,9 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
     const el = els.current[slot];
     if (el && el.getAttribute("data-src") !== url) {
       el.setAttribute("data-src", url);
+      // Before the fetch, not after: from here until `loadeddata` this element is
+      // still showing the clip it is being taken away from.
+      hasFrame.current[slot] = false;
       el.src = url;
       // `preload="auto"` alone does not always start the fetch for a src set
       // after mount; load() makes it explicit.
@@ -172,8 +249,26 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
         const slot = assign(beatId, url);
         const el = els.current[slot];
         if (!el) return;
+        wanted.current = beatId;
+        // Hold the outgoing picture until this element can actually paint *this*
+        // clip. A beat that was buffered while the previous one played clears this
+        // instantly; the ones that do not are exactly the ones that used to flash
+        // the wrong shot -- a branch whose clip finished after the cursor had
+        // already moved to it, or a jump from the story tree to a beat no slot was
+        // holding.
+        if (!hasFrame.current[slot]) {
+          await awaitFrame(slot);
+          // A newer `show` took over while we waited -- it owns the screen now, and
+          // revealing this slot would put the beat the player just left back on it.
+          if (wanted.current !== beatId) return;
+        }
         const previous = visible.current;
         visible.current = beatId;
+        // Rewind before revealing, not after. A slot that has already been watched
+        // -- the story tree jumping back to a beat still in the pool -- is sitting
+        // on its *last* frame, and showing it first and seeking second puts the end
+        // of the shot on screen for the length of the seek.
+        if (fromStart && el.currentTime !== 0) el.currentTime = 0;
         // Pause whatever was on screen only after the new one is visible, so the
         // compositor never has two frames' worth of nothing to show.
         for (const i of SLOTS) {
@@ -182,7 +277,6 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
           e.style.opacity = i === slot ? "1" : "0";
           e.style.zIndex = i === slot ? "2" : "1";
         }
-        if (fromStart) el.currentTime = 0;
         let refused = false;
         try {
           await el.play();
@@ -260,6 +354,15 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
           // No `controls`: a scrubber invites the player to seek, and seeking
           // breaks the illusion that this is one continuous film rather than a
           // chain of 14-second clips.
+          // `loadeddata` = readyState reached HAVE_CURRENT_DATA = there is a frame
+          // of *this* src to paint, which is the precondition `show` waits on.
+          onLoadedData={() => markFrame(i)}
+          // And the other direction: `load()` empties the element. Belt and braces
+          // with the explicit clear in `assign`, and it also covers the teardown
+          // path, so the flag can never outlive the media it describes.
+          onEmptied={() => {
+            hasFrame.current[i] = false;
+          }}
           onTimeUpdate={(ev) => {
             const id = beatOf.current[i];
             if (!id || id !== visible.current) return;
