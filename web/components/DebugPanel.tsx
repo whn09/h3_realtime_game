@@ -10,7 +10,7 @@ import type { Beat, GameEvent, IrView, SessionView } from "@/lib/types";
  *
  *   * **时间** -- where the seconds went. Every stage already measures itself into
  *     `timings`, but the numbers only existed in the JSON, so "生成慢" could not
- *     be attributed to the Director, to PromptIR, to the GPU, or to scp.
+ *     be attributed to the Director, to PromptIR, to the GPU, or to the network.
  *   * **这一拍** -- the exact string H3 was given, fetched from the on-disk
  *     archive, plus the keyframe prompt when this beat re-drew its own cast.
  *     These two are the answer to every "为什么画面是这样" question.
@@ -63,11 +63,14 @@ const STAGES: { key: string; label: string; hint?: string; total?: boolean }[] =
   { key: "director_total_ms", label: "导演出岔路", hint: "Haiku 4.5，写两个分支" },
   { key: "promptir_wall_ms", label: "提示词编译", hint: "PromptIR，含校验与重修" },
   { key: "keyframe_ms", label: "关键帧", hint: "SD3.5，只有硬切/重锚/开场才有" },
-  { key: "gpu_upload_ms", label: "上传首帧", hint: "ssh 送条件帧上 GPU 机" },
+  { key: "gpu_upload_ms", label: "上传首帧", hint: "H3_TRANSPORT=http 时恒为 0：H3 自己来拉" },
   { key: "gpu_server_ms", label: "H3 生成", hint: "SGLang 服务端自己报的耗时" },
   { key: "gpu_sglang_ms", label: "H3 提交+轮询", hint: "HTTP 往返，含排队" },
-  { key: "gpu_download_ms", label: "下载成片", hint: "scp 把 mp4 拉回来" },
-  { key: "gpu_onbox_ms", label: "机上取末帧", hint: "在 GPU 机上抽最后一帧" },
+  { key: "gpu_download_ms", label: "下载成片", hint: "取回 mp4，内网 HTTP 约 6ms" },
+  // `gpu_onbox_ms` is the submit-and-poll wall clock, which is `gpu_server_ms`
+  // plus queueing on the box. It is not the last-frame extraction, whatever an
+  // earlier label here said.
+  { key: "gpu_onbox_ms", label: "GPU 机上墙钟", hint: "提交到完成，比服务端耗时多出的是排队" },
   { key: "gpu_postprocess_ms", label: "本地后处理", hint: "ffmpeg 抽帧/探测" },
   { key: "gpu_total_ms", label: "GPU 段合计", total: true },
   { key: "beat_wall_ms", label: "这一拍总墙钟", total: true },

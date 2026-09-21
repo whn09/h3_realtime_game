@@ -21,10 +21,12 @@ import hashlib
 import heapq
 import itertools
 import logging
+import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 import httpx
 
@@ -286,11 +288,12 @@ class WrapperBackend:
 
 @dataclass(frozen=True)
 class Replica:
-    """One SGLang instance: an ssh alias and the local port the tunnel forwards.
+    """One SGLang instance: an address to call, and an ssh alias.
 
-    Both halves are load-bearing. The HTTP API is reached through the port; the
-    clip and the conditioning frame move over ssh to the alias, because the API
-    has no upload and no download (see `H3Backend`).
+    The address is where the HTTP API lives -- a private IP now that the servers
+    bind 0.0.0.0, a forwarded local port before that. The alias is only used by
+    `H3_TRANSPORT=ssh`; under the default `http` transport nothing shells out, and
+    it survives as the label in logs, `/healthz`, and `GpuResult.endpoint`.
     """
 
     alias: str
@@ -326,25 +329,77 @@ def read_replicas() -> list[Replica]:
     return out
 
 
+def _lan_ip() -> str | None:
+    """This host's address on the interface that leaves it, or None.
+
+    Asks the routing table where it would send a packet rather than parsing
+    `ip addr`, because a box with docker bridges has several addresses and only
+    one of them is the one a peer in the VPC can use. UDP, so nothing is sent.
+
+    The peer is deliberately *not* a replica's address. Replicas are often
+    `127.0.0.1:<tunnel port>`, and routing to loopback would answer `127.0.0.1` --
+    the one address that is wrong here, since it names the GPU box to the GPU box.
+    A public address forces the question "which of my interfaces faces outward",
+    which in this VPC is the same interface that faces the other instances.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("1.1.1.1", 9))
+        ip = s.getsockname()[0]
+    except OSError as exc:
+        log.warning("could not work out this host's LAN address: %s", exc)
+        return None
+    finally:
+        s.close()
+    if ip.startswith("127."):
+        log.warning("routing says this host is %s, which no GPU box can fetch from", ip)
+        return None
+    return ip
+
+
+def _internal_base_url() -> str:
+    """Where the GPU boxes should fetch conditioning frames from.
+
+    Empty if it cannot be determined, which the caller treats as "http transport
+    cannot serve frames" and falls back to uploading them.
+    """
+    if settings.internal_base_url:
+        return settings.internal_base_url
+    ip = _lan_ip()
+    return f"http://{ip}:{settings.assets_port}" if ip else ""
+
+
 class H3Backend:
     """Talks to the live SGLang Diffusion deployment described in GAME.md.
 
-    The API is submit-then-poll and moves no bytes in either direction, which is
-    the one thing that shapes this class. H3 takes and returns *URIs that the
-    worker resolves on the server's own filesystem*: there is no multipart upload
-    for the conditioning frame and no `/content` endpoint for the clip (`url` in
-    the response is genuinely `null`). So every generation is three legs, not one:
+    Every generation is three legs -- get the conditioning frame to the box,
+    submit and poll, get the mp4 back -- and the only question is whether the
+    outer two are HTTP or ssh. `H3_TRANSPORT` picks:
 
-        1. put the conditioning frame on the box   (ssh, ~100-400 KB)
-        2. POST /v1/videos, poll GET /v1/videos/{id}  (~8.3 s, the actual work)
-        3. copy the finished mp4 back               (scp, ~950 KB)
+        http (default)  `conditions[].uri` is a URL on this box's asset server, so
+                        the worker fetches the frame itself; the clip comes back
+                        from `GET /v1/videos/{id}/content`. No subprocesses.
+        ssh             `cat` the frame over ssh, `scp` the clip back, and extract
+                        the next frame on the box with the container's ffmpeg.
 
-    Leg 3 is unavoidable -- the browser has to play the thing -- and measured at
-    ~3 s from us-east-2 to a laptop, which is why `GAME.md` quotes 11.32 s to the
-    Mac against 8.34 s on the box. In-region it nearly vanishes. Leg 1 *is*
-    avoidable and `prefetch()` is how: the moment a beat's last frame exists, it
-    is pushed to every replica in the background, so by the time a child beat
-    reaches a slot the upload has already happened on someone else's time.
+    GAME.md finding 3 says this build has no download endpoint and the API moves
+    no bytes in either direction. That was wrong, and both halves were measured
+    here: the server fetched a 2,044,883-byte keyframe from an http.server on this
+    box, and `/content` returned 830,271 bytes beginning with `ftyp`. `url` in the
+    poll response is still null, which is presumably where the belief came from.
+
+    What http buys is not speed -- the bytes are the same bytes on the same VPC --
+    but that a URL is not addressed to one machine. Under ssh, a frame had to be
+    pushed to every replica ahead of time (`prefetch`) or uploaded on the critical
+    path, and the on-box extraction in `_extract_last_frame` only paid off for a
+    child that happened to land on its parent's box. A URL is fetchable from
+    either replica, so the scheduler stops needing to care, and the last frame is
+    just a file the local `_postprocess` already writes.
+
+    The ssh path stays because it is the only one that works if the GPU boxes
+    cannot route back to us, and because `prefetch` + on-box extraction are real
+    measured wins (0.226s on-box against 3.4-10.4s to move the mp4) that should
+    not be deleted merely for being unused.
 
     Frames rather than seconds is the other deployment fact worth stating: the
     request carries `duration_seconds` as a float and `seconds` is never sent
@@ -367,8 +422,38 @@ class H3Backend:
         # file to that box. Keyed rather than re-run because `prefetch` and
         # `generate` race for the same frame by design.
         self._uploads: dict[tuple[str, str], asyncio.Task[str]] = {}
+        self.http = settings.h3_transport != "ssh"
+        # Resolved once, at construction, so a misconfiguration is a line in the
+        # startup log rather than a mystery 400 on the player's first beat. Empty
+        # means http transport cannot serve frames, and each `generate` falls back
+        # to the ssh upload for that one leg.
+        self.internal_base = _internal_base_url() if self.http else ""
+        log.info(
+            "h3 transport=%s assets=%s",
+            "http" if self.http else "ssh", self.internal_base or "(ssh upload)",
+        )
 
-    # -- ssh plumbing ------------------------------------------------------- #
+    # -- addressing our own assets ------------------------------------------ #
+
+    def _asset_url(self, local: Path) -> str | None:
+        """The URL a GPU box can GET this file at, or None if there isn't one.
+
+        None is not an error. Anything the backend is handed from outside
+        `ASSETS_DIR` -- a frame someone points at by hand, a future cache
+        elsewhere on disk -- is simply not published, and the caller uploads it
+        instead. Silently serving a path outside the asset root would turn a
+        read-only image server into an arbitrary-file read.
+        """
+        if not self.internal_base:
+            return None
+        try:
+            rel = local.resolve().relative_to(settings.assets_dir.resolve())
+        except ValueError:
+            log.debug("%s is outside ASSETS_DIR; uploading it instead", local)
+            return None
+        return f"{self.internal_base}/{quote(rel.as_posix())}"
+
+    # -- ssh plumbing (H3_TRANSPORT=ssh) ------------------------------------ #
 
     def _ssh_opts(self, alias: str) -> list[str]:
         opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes"]
@@ -437,8 +522,13 @@ class H3Backend:
         Fire and forget on purpose: a failure here costs nothing, because
         `generate` awaits the same task and reports the failure at the point
         where it actually matters.
+
+        Nothing to do under http: the frame is already where it needs to be, and
+        `generate` sends a URL instead of moving it.
         """
         path = Path(local)
+        if self.http and self._asset_url(path) is not None:
+            return
         if not path.exists():
             return
         for rep in self.replicas.values():
@@ -511,6 +601,48 @@ class H3Backend:
         if not dest.exists() or dest.stat().st_size == 0:
             raise GpuTransportError(f"{remote} came back empty from {rep.alias}")
 
+    async def _fetch(self, rep: Replica, vid: str, dest: Path) -> None:
+        """The clip, over the same connection that asked for it.
+
+        Streamed to a `.part` and renamed, for the same reason the ssh upload is:
+        `beat.mp4` under `ASSETS_DIR` is being served to a browser by the asset
+        server while this runs, and a partial file at the final name is a video
+        the player can start and fail to finish.
+
+        `Content-Type` is absent on this endpoint, so the check is the ISO-BMFF
+        signature instead. It earns its place: the route is annotated
+        `application/json` in the schema, so a build where it describes the file
+        rather than returning it would otherwise be a confusing ffprobe error.
+        """
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        size = 0
+        try:
+            async with self.client.stream(
+                "GET", f"{rep.base}/v1/videos/{vid}/content", timeout=settings.gpu_timeout_s
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", "replace")
+                    raise GpuError(
+                        f"{rep.alias} would not return {vid} ({resp.status_code}): {body[:300]}"
+                    )
+                head = b""
+                with tmp.open("wb") as fh:
+                    async for chunk in resp.aiter_bytes(256 * 1024):
+                        if len(head) < 32:
+                            head += chunk[: 32 - len(head)]
+                        size += len(chunk)
+                        fh.write(chunk)
+        except (httpx.HTTPError, OSError) as exc:
+            tmp.unlink(missing_ok=True)
+            raise GpuTransportError(f"fetching {vid} from {rep.alias} failed: {exc}") from exc
+        if not size:
+            tmp.unlink(missing_ok=True)
+            raise GpuTransportError(f"{vid} came back empty from {rep.alias}")
+        if b"ftyp" not in head:
+            tmp.unlink(missing_ok=True)
+            raise GpuError(f"{rep.alias} returned {size}B of non-mp4 for {vid}: {head[:32]!r}")
+        tmp.replace(dest)
+
     # -- the API ------------------------------------------------------------ #
 
     async def health(self, endpoint: str) -> dict[str, Any]:
@@ -521,8 +653,10 @@ class H3Backend:
     def _body(self, req: GpuRequest, frames: int, keyframe: str | None) -> dict[str, Any]:
         conditions = []
         if keyframe:
-            # `frame_index` is required for a keyframe role and rejected for a
-            # reference role. 0 pins the opening frame, which is the one a game
+            # `uri` is either a path on the box (ssh transport) or an `http://` URL
+            # the worker fetches itself; it takes both, and the caller decides
+            # which. `frame_index` is required for a keyframe role and rejected for
+            # a reference role. 0 pins the opening frame, which is the one a game
             # wants. VDN serves t2va and fl2va and refuses ref2va outright -- a
             # training limit, not a flag.
             conditions = [
@@ -605,8 +739,17 @@ class H3Backend:
         started = time.perf_counter()
 
         keyframe: str | None = None
+        served: str | None = None
         already = req.first_frame_remote.get(rep.alias)
-        if req.first_frame and already:
+        if req.first_frame and self.http:
+            served = self._asset_url(Path(req.first_frame))
+        if served:
+            # A URL, so there is nothing to move and nothing that had to be moved
+            # earlier: `gpu_upload_ms` is 0 because the leg does not exist, not
+            # because it was won by a prefetch.
+            keyframe = served
+            timings["gpu_upload_ms"] = 0.0
+        elif req.first_frame and already:
             # The parent generated on this same replica and left its last frame
             # here, so there is nothing to move. The common case at 2 replicas:
             # one of each beat's two children lands on the parent's box.
@@ -621,23 +764,32 @@ class H3Backend:
             log.warning("conditioning frame %s is gone; falling back to t2va", req.first_frame)
 
         t0 = time.perf_counter()
-        data = await self._poll(rep, await self._submit(rep, self._body(req, frames, keyframe)))
+        vid = await self._submit(rep, self._body(req, frames, keyframe))
+        data = await self._poll(rep, vid)
         timings["gpu_server_ms"] = round((data.get("inference_time_s") or 0.0) * 1000.0, 1)
         timings["gpu_onbox_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
 
         remote = data.get("file_path")
-        if not remote:
+        if not remote and not self.http:
             raise GpuError(f"{rep.alias} completed {req.job_id} with no file_path: {str(data)[:300]}")
         t0 = time.perf_counter()
-        # Concurrent, not sequential: the extraction is 0.23s of the box's time
-        # and the download is seconds of the network's, so serialising them would
-        # add the whole extraction to the critical path for no reason. The
-        # extraction never raises -- it returns None -- so `gather` here cannot
-        # lose the download's exception to a sibling failure.
-        _, remote_last = await asyncio.gather(
-            self._download(rep, remote, video),
-            self._extract_last_frame(rep, remote, req.job_id),
-        )
+        remote_last: str | None = None
+        if self.http:
+            await self._fetch(rep, vid, video)
+            # No on-box extraction to pair with it. `_postprocess` writes
+            # `last.png` next to the clip a moment from now, and under http that
+            # file is addressable by URL from *either* replica -- which is
+            # strictly better than a path that only one of them can read.
+        else:
+            # Concurrent, not sequential: the extraction is 0.23s of the box's time
+            # and the download is seconds of the network's, so serialising them
+            # would add the whole extraction to the critical path for no reason.
+            # The extraction never raises -- it returns None -- so `gather` here
+            # cannot lose the download's exception to a sibling failure.
+            _, remote_last = await asyncio.gather(
+                self._download(rep, remote, video),
+                self._extract_last_frame(rep, remote, req.job_id),
+            )
         timings["gpu_download_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
 
         t0 = time.perf_counter()

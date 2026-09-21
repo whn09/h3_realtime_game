@@ -60,9 +60,23 @@ class Settings:
 
     # --- The live SGLang deployment (GAME.md) ---------------------------------
     # `alias=host:port,alias=host:port`. Empty means read the file
-    # `game_tunnel.sh` wrote, which is the normal case -- the aliases are ssh
-    # aliases and the backend needs them for scp, so a bare URL is not enough.
+    # `game_tunnel.sh` wrote. The alias is an ssh alias; under `H3_TRANSPORT=ssh`
+    # it is load-bearing (scp needs it), under `http` it is only a label in logs
+    # and `/healthz`.
     h3_replicas: str = field(default_factory=lambda: _env("H3_REPLICAS", ""))
+    # `http` | `ssh`. How the conditioning frame gets to the GPU and how the clip
+    # comes back -- *not* how the API is reached, which has always been HTTP.
+    #
+    # `http` hands H3 a URL in `conditions[].uri` and lets it fetch the frame
+    # itself, then pulls the clip from `GET /v1/videos/{id}/content`. Measured
+    # working on this build: the server fetched 2,044,883 bytes from this box and
+    # `/content` returned real mp4 bytes. `ssh` is the original path -- `cat` the
+    # frame over ssh, `scp` the clip back -- kept because it is the only thing
+    # that works if the GPU boxes cannot route back to us, and because a
+    # regression in one leg should be switchable without a deploy.
+    h3_transport: str = field(
+        default_factory=lambda: _env("H3_TRANSPORT", "http").strip().lower()
+    )
     h3_state_dir: Path = field(
         default_factory=lambda: Path(
             _env("H3_STATE_DIR", str(Path(tempfile.gettempdir()) / "h3game"))
@@ -133,7 +147,10 @@ class Settings:
     # preempted once it starts. PRIORITY_SPECULATIVE only decides who takes the
     # *next* free slot, so the children the player is about to need still queue
     # three deep behind speculation. The download outliers are the same crowding one
-    # layer down -- four concurrent scp's sharing one ControlMaster socket.
+    # layer down -- four concurrent scp's sharing one ControlMaster socket, which
+    # is the one line of this that `H3_TRANSPORT=http` has since made obsolete
+    # (`gpu_download_ms` is now ~6ms). The slot arithmetic is untouched by it, and
+    # the slot arithmetic is the reason.
     #
     # So the rule this encodes is slots >= branch_count ** depth. At 2 slots and
     # branch 2, depth 1 is exactly saturating and depth 2 is 3x oversubscribed.
@@ -245,14 +262,31 @@ class Settings:
 
     # --- Storage / serving ---------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "./data")))
-    # Keyframes, and every clip the `fake` and `h3` backends produce. The real
-    # deployment returns a path on the GPU box and has no download endpoint
-    # (GAME.md, finding 3), so the orchestrator copies clips here and serves them
-    # itself rather than pointing the browser at the box.
+    # Keyframes, and every clip the `fake` and `h3` backends produce. Clips are
+    # copied here rather than served from the GPU box: the box's `/content` is
+    # keyed by job id and its instance store is wiped on stop/start, so a session
+    # the player reopens tomorrow would 404.
     assets_dir: Path = field(default_factory=lambda: Path(_env("ASSETS_DIR", "./data/assets")))
     public_base_url: str = field(
         default_factory=lambda: _env("PUBLIC_BASE_URL", "http://127.0.0.1:8100/assets").rstrip("/")
     )
+    # The same files, addressed the way a *GPU box* has to address them. Separate
+    # from `public_base_url` because that one is what a browser uses and the
+    # browser reaches this process through an ssh tunnel on 127.0.0.1 -- a URL the
+    # GPU boxes cannot resolve to us.
+    #
+    # Empty means "work it out at startup": the private address of whichever
+    # interface routes to the replicas, plus `assets_port`. Set it explicitly only
+    # to override that guess.
+    internal_base_url: str = field(
+        default_factory=lambda: _env("INTERNAL_BASE_URL", "").rstrip("/")
+    )
+    # The read-only asset server, which is the only thing this process binds on the
+    # VPC interface. It serves `assets_dir` and nothing else -- no session
+    # creation, no choose, no GPU budget; those stay on 127.0.0.1:8100 behind the
+    # tunnel. Needed because H3 fetches the conditioning frame itself.
+    assets_host: str = field(default_factory=lambda: _env("ASSETS_HOST", "0.0.0.0"))
+    assets_port: int = field(default_factory=lambda: _env_int("ASSETS_PORT", 8101))
     cors_origins: list[str] = field(default_factory=lambda: _env_list("CORS_ORIGINS", "*"))
 
     ffmpeg: str = field(default_factory=lambda: _env("FFMPEG_BIN", "ffmpeg"))

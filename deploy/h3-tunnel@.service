@@ -1,0 +1,22 @@
+[Unit]
+# One forward per replica: %i is the LOCAL port, and the replica alias is derived
+# from it in h3-tunnel.sh. Disabled -- the SGLang servers bind 0.0.0.0 now and are
+# called at their private addresses. See h3-tunnel.sh for how to bring it back.
+Description=SGLang forward for local port %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+# -N: forward and nothing else. A tunnel that also allocates a pty dies
+# differently -- the remote shell can exit and take the forward with it, and the
+# failure then surfaces as an HTTP timeout three layers away.
+# ExitOnForwardFailure: without it ssh connects, fails to bind (because a stale
+# tunnel still holds the port), and sits there looking healthy while every
+# request goes nowhere.
+ExecStart=/home/ubuntu/kunlun/h3-tunnel.sh %i
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

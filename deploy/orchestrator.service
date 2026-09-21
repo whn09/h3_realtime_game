@@ -1,0 +1,21 @@
+[Unit]
+Description=Kunlun orchestrator
+# No tunnel dependency: SGLang binds 0.0.0.0 on both GPU boxes now and is
+# reached at its private address, so there is nothing to forward.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kunlun/services/orchestrator
+EnvironmentFile=/home/ubuntu/kunlun/.env
+# Bound to 127.0.0.1, not 0.0.0.0: the only way in is the ssh tunnel from the
+# laptop. The service has no auth of its own, so exposing it on a public
+# interface would put session creation -- and the GPU budget behind it -- on the
+# open internet.
+ExecStart=/home/ubuntu/kunlun/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8100
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

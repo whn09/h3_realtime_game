@@ -902,6 +902,12 @@ class Engine:
         return {
             "ok": True,
             "fake_gpu": settings.fake_gpu,
+            # Which way the bytes go, and the URL the GPU boxes were told to fetch
+            # frames from. Worth a line here because the wrong answer to the second
+            # one fails at submit time on a box we do not control, and this is the
+            # cheapest place to read what we actually advertised.
+            "transport": settings.h3_transport,
+            "assets_for_gpu": getattr(self.gpu.backend, "internal_base", None),
             "slots": self.gpu.slots,
             "pool": self.gpu.snapshot(),
             "endpoints": await self.gpu.health(),

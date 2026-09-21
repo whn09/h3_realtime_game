@@ -16,6 +16,10 @@ In development this process also serves `/assets`, which is where the fake GPU
 backend and the keyframe generator write. In production those are static files
 behind nginx and a CDN pull (section 5.1), and `PUBLIC_BASE_URL` points there
 instead.
+
+Under `H3_TRANSPORT=http` it serves them a second time, on its own port and its
+own socket (`_assets_app`). See that function for why the same files are served
+twice rather than once on 0.0.0.0.
 """
 
 from __future__ import annotations
@@ -28,11 +32,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from .config import settings
 from .engine import Engine, EngineError, session_view
@@ -65,6 +72,38 @@ class SeekRequest(BaseModel):
     beat_id: str
 
 
+def _assets_app() -> Starlette:
+    """A read-only file server, and deliberately nothing else.
+
+    H3 fetches the conditioning frame itself now, so something on this box has to
+    listen on the VPC interface. It is not this API. The control surface has no
+    auth of its own -- anyone who can reach it can create sessions and spend GPU
+    slots -- so it stays on 127.0.0.1 behind the ssh tunnel, and what gets exposed
+    to the other instances is a separate app whose entire routing table is one
+    `StaticFiles` mount.
+
+    That makes the exposure a property of the object rather than of a middleware
+    someone has to remember: there is no POST anywhere in this app to forget to
+    protect, and `StaticFiles` answers GET and HEAD only. The files themselves are
+    immutable PNGs and mp4s already being served to the player.
+    """
+    return Starlette(
+        routes=[Mount("/", app=StaticFiles(directory=str(settings.assets_dir)), name="assets")]
+    )
+
+
+async def _serve_assets() -> None:
+    """Run that app on its own socket until cancelled."""
+    config = uvicorn.Config(
+        _assets_app(),
+        host=settings.assets_host,
+        port=settings.assets_port,
+        log_level="warning",   # one line per keyframe fetch is noise, not signal
+        access_log=False,
+    )
+    await uvicorn.Server(config).serve()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +123,17 @@ async def lifespan(app: FastAPI):
         engine.gpu.kind, engine.gpu.slots, settings.beat_seconds, settings.pregen_depth,
     )
 
+    assets: asyncio.Task[None] | None = None
+    # Only the h3 backend has anything that needs to reach in; the fake backend
+    # animates frames locally. Which also keeps the throwaway test server
+    # (bench/fake_gpu_server.sh) from fighting the live one for the port.
+    if engine.gpu.kind == "h3" and settings.h3_transport != "ssh":
+        assets = asyncio.create_task(_serve_assets())
+        log.info(
+            "assets for the GPU boxes on %s:%d -> %s",
+            settings.assets_host, settings.assets_port, settings.assets_dir,
+        )
+
     warm: asyncio.Task[None] | None = None
     if settings.h3_warm:
         # Not awaited: it costs ~8s per replica and the server is useful before it
@@ -95,6 +145,8 @@ async def lifespan(app: FastAPI):
     finally:
         if warm and not warm.done():
             warm.cancel()
+        if assets:
+            assets.cancel()
         await engine.shutdown()
         await client.aclose()
         await store.stop()

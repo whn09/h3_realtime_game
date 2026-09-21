@@ -38,9 +38,14 @@ npm run dev
 没有 GPU 也能开发：`FAKE_GPU=1` 用 ffmpeg 本地合成影像，但走的是同一套槽位记账和同一套末帧
 抽取，所以整个故事引擎照样被跑到。
 
-H3 后端要求两台 GPU 机的 SGLang 通过 ssh 隧道可达——它只绑 `127.0.0.1:30010`，
-并且 API 本身不传字节，条件帧上去、成片下来都走 ssh，所以 `H3_REPLICAS` 里的 ssh **别名**
-是有用的，光给 URL 不够。
+H3 后端全程走 HTTP：`H3_REPLICAS` 填两台 GPU 机的内网地址，条件帧由 H3 自己来拉
+（`conditions[].uri` 给 URL），成片从 `GET /v1/videos/{id}/content` 取回。为此编排器会
+另起一个**只读**的静态文件服务绑在 `0.0.0.0:ASSETS_PORT`（默认 8101，只服务 `ASSETS_DIR`
+里的图片和成片）；控制接口仍然只绑 `127.0.0.1:8100`，只能从 ssh 隧道进来。拓扑和验证结果
+见 `deploy/README.md`。
+
+`H3_TRANSPORT=ssh` 是退路：条件帧用 ssh 推上去、成片用 scp 拉回来，`H3_REPLICAS` 里的 ssh
+**别名**这时才是必需的。GPU 机不能回连我们的时候用它。
 
 ## 状态
 
