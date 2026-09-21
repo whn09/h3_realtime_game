@@ -5,8 +5,7 @@ import { getIr } from "@/lib/api";
 import type { Beat, GameEvent, IrView, SessionView } from "@/lib/types";
 
 /**
- * The instrument panel. Four things the pipeline decides that are otherwise
- * invisible from a browser:
+ * The instrument panel. Five things that are otherwise invisible from a browser:
  *
  *   * **时间** -- where the seconds went. Every stage already measures itself into
  *     `timings`, but the numbers only existed in the JSON, so "生成慢" could not
@@ -17,6 +16,9 @@ import type { Beat, GameEvent, IrView, SessionView } from "@/lib/types";
  *   * **世界观** -- the frozen bible, including the fields nothing else renders:
  *     the style anchor that is appended to every IR verbatim, and each
  *     character's appearance, which is the whole of the consistency mechanism.
+ *   * **播放器** -- the three `<video>` elements as the browser sees them. The one
+ *     tab that is not about the pipeline at all: everything above answers "what did
+ *     we generate", this one answers "why is that not on screen".
  *   * **事件** -- the SSE log, newest first.
  *
  * Read-only by construction. It fetches one endpoint that the player's own path
@@ -33,11 +35,12 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "time" | "beat" | "bible" | "events";
+type Tab = "time" | "beat" | "player" | "bible" | "events";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "time", label: "时间" },
   { id: "beat", label: "这一拍" },
+  { id: "player", label: "播放器" },
   { id: "bible", label: "世界观" },
   { id: "events", label: "事件" },
 ];
@@ -178,6 +181,119 @@ function Aggregate({ beats }: { beats: Beat[] }) {
             <td>{fmtMs(r.med)}</td>
             <td>{fmtMs(r.lo)}</td>
             <td>{fmtMs(r.hi)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** The two media state machines, by value -- the numbers on their own are unreadable. */
+const READY_STATE = ["NOTHING", "METADATA", "CURRENT", "FUTURE", "ENOUGH"] as const;
+const NETWORK_STATE = ["EMPTY", "IDLE", "LOADING", "NO_SOURCE"] as const;
+const MEDIA_ERR = ["", "ABORTED", "NETWORK", "DECODE", "SRC_UNSUPPORTED"] as const;
+
+interface SlotRow {
+  slot: number;
+  beat: string;
+  visible: boolean;
+  ready: string;
+  network: string;
+  buffered: string;
+  clock: string;
+  note: string;
+}
+
+/**
+ * The three `<video>` elements exactly as the browser sees them, polled.
+ *
+ * This tab exists because of a debugging session that should have taken a minute
+ * and took an afternoon: a clip would not play, devtools showed the fetch
+ * succeeding, and every explanation -- dead tunnel, undecodable file, refused
+ * autoplay, a reveal that raced the first frame -- looks identical from outside the
+ * element. The element itself knows which one it is; `readyState` and
+ * `networkState` say so in two words. `IDLE` with `NOTHING` means nothing was ever
+ * fetched; `LOADING` with `NOTHING` means it is on the way; `ENOUGH` while paused
+ * means the data is all here and the problem is `play()`.
+ *
+ * Read from the DOM rather than through a handle on purpose: a probe that shares no
+ * state with `VideoStage` cannot be fooled by `VideoStage`'s own bookkeeping being
+ * wrong, which is precisely the thing one wants to check.
+ *
+ * Also worth knowing while reading it: a fresh load of a mid-story session assigns
+ * **three** clips, not one -- the beat on screen plus both branches, prefetched so
+ * the decision moment has something to cut to. Three mp4 fetches in the network tab
+ * is the pool working. Fewer usually means the browser served one from cache (no row
+ * at all, until a hard reload) or has not started it yet.
+ */
+function StageProbe() {
+  const [rows, setRows] = useState<SlotRow[]>([]);
+
+  useEffect(() => {
+    const read = () => {
+      const els = Array.from(document.querySelectorAll<HTMLVideoElement>("video.stage-video"));
+      setRows(
+        els.map((el, slot) => {
+          const src = el.currentSrc || el.getAttribute("data-src") || "";
+          // .../_h3/<sid>-<beat>/beat.mp4 -> <beat>
+          const dir = src.split("/").at(-2) ?? "";
+          const buffered = el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0;
+          const err = el.error;
+          return {
+            slot,
+            beat: dir ? dir.replace(/^\d+-[0-9a-z]+-/, "") : "—",
+            visible: el.style.opacity === "1",
+            ready: `${READY_STATE[el.readyState] ?? el.readyState}`,
+            network: `${NETWORK_STATE[el.networkState] ?? el.networkState}`,
+            buffered: `${buffered.toFixed(1)}s`,
+            clock: `${el.currentTime.toFixed(1)}s / ${
+              Number.isFinite(el.duration) ? el.duration.toFixed(1) : "?"
+            }s`,
+            note: err
+              ? `${MEDIA_ERR[err.code] ?? err.code}${err.message ? `: ${err.message}` : ""}`
+              : el.paused
+                ? "paused"
+                : "playing",
+          };
+        })
+      );
+    };
+    read();
+    // 400ms: fast enough to watch a load progress, slow enough that the panel is
+    // not itself a load on the thing it is measuring.
+    const timer = setInterval(read, 400);
+    return () => clearInterval(timer);
+  }, []);
+
+  if (rows.length === 0) return <p className="dbg-empty">舞台还没有挂载。</p>;
+  return (
+    <table className="dbg-table">
+      <thead>
+        <tr>
+          <th>slot</th>
+          <th>beat</th>
+          <th>readyState</th>
+          <th>networkState</th>
+          <th>已缓冲</th>
+          <th>进度</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.slot}>
+            <td>
+              {r.slot}
+              {r.visible ? " ●" : ""}
+            </td>
+            <td>
+              <code>{r.beat}</code>
+            </td>
+            <td>{r.ready}</td>
+            <td>{r.network}</td>
+            <td>{r.buffered}</td>
+            <td>{r.clock}</td>
+            <td>{r.note}</td>
           </tr>
         ))}
       </tbody>
@@ -394,6 +510,19 @@ export default function DebugPanel({ sid, session, shown, events, onClose }: Pro
           ) : (
             <p className="dbg-empty">还没有在播的片段。</p>
           )
+        ) : null}
+
+        {tab === "player" ? (
+          <>
+            <h4>三个 video 元素（● 是正在显示的那个）</h4>
+            <StageProbe />
+            <p className="dbg-empty">
+              一次载入会给三条片子赋 src：在播的这一拍，加上预取的两个分支。
+              <code>IDLE</code> + <code>NOTHING</code> = 根本没去取；<code>LOADING</code> +{" "}
+              <code>NOTHING</code> = 在路上；<code>ENOUGH</code> 还 paused = 数据齐了，卡在
+              play()。
+            </p>
+          </>
         ) : null}
 
         {tab === "bible" ? (
