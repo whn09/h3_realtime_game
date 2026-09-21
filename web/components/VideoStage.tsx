@@ -248,6 +248,24 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
         el.removeAttribute("data-src");
         el.load();
       }
+      // The bookkeeping describes those elements, so it has to be released with
+      // them. Not tidiness -- this is load-bearing in development: React Strict
+      // Mode runs this cleanup and then re-runs the effects *on the same
+      // instance*, so these refs survive while the media does not. Left alone,
+      // `slotOf` still claims the cursor's beat owns a slot (so `assign` skips the
+      // src) and `visible` still claims it is on screen (so the parent's show
+      // effect returns early), and the visible element stays at EMPTY/NOTHING with
+      // `paused === false` -- because `play()` on a srcless element never settles
+      // and never fires `error`. A black stage, no toast, nothing in the log, and
+      // the two prefetched branches loading perfectly beside it.
+      slotOf.current.clear();
+      beatOf.current = [null, null, null];
+      hasFrame.current = [false, false, false];
+      visible.current = null;
+      wanted.current = null;
+      // Anything parked on a first frame will never get one. They wake, see that
+      // `wanted` is no longer theirs, and decline to reveal.
+      for (const i of SLOTS) wake(i);
     },
     []
   );
@@ -256,7 +274,12 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
     const existing = slotOf.current.get(beatId);
     if (existing !== undefined) {
       lastUsed.current[existing] = ++useCount.current;
-      return existing;
+      // Not an early return: fall through to the src check below. Believing the
+      // map over the element is what made an emptied slot unrecoverable -- the
+      // only thing that proves a slot holds this clip is the element's own
+      // `data-src`, and if that is gone the element needs arming again. When it
+      // matches, everything below is a no-op, which is what makes this free.
+      return arm(existing, url, poster);
     }
     // Prefer an empty slot, then the least recently used one that is neither on
     // screen nor about to be. Evicting the visible slot would blank the picture
@@ -280,7 +303,16 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
     beatOf.current[slot] = beatId;
     slotOf.current.set(beatId, slot);
     lastUsed.current[slot] = ++useCount.current;
+    return arm(slot, url, poster);
+  };
 
+  /**
+   * Make sure this element is actually fetching this url. Idempotent, and the
+   * `data-src` comparison is what makes it so: it is the element's own record of
+   * what it was last pointed at, so it survives re-renders and cannot disagree
+   * with the media the way a ref can.
+   */
+  const arm = (slot: number, url: string, poster?: string | null): number => {
     const el = els.current[slot];
     if (el && el.getAttribute("data-src") !== url) {
       el.setAttribute("data-src", url);

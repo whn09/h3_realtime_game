@@ -520,7 +520,9 @@ export default function DebugPanel({ sid, session, shown, events, onClose }: Pro
               一次载入会给三条片子赋 src：在播的这一拍，加上预取的两个分支。
               <code>IDLE</code> + <code>NOTHING</code> = 根本没去取；<code>LOADING</code> +{" "}
               <code>NOTHING</code> = 在路上；<code>ENOUGH</code> 还 paused = 数据齐了，卡在
-              play()。
+              play()；<code>EMPTY</code> + beat 显示 <code>—</code> = 这个元素被清空了，连 src
+              都没有（此时哪怕写着 playing 也是假的：对没有 src 的元素调 play() 不会报错，只会永远
+              不返回）。
             </p>
           </>
         ) : null}
