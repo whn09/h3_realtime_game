@@ -76,3 +76,24 @@ python chain_drift.py --wrapper http://127.0.0.1:8000 --beats 8
 
 都写到 `results/`：CSV 给做表，JSON 留原始响应。
 `probe_sglang.json` 里的 raw 响应在后面调 wrapper 的时候还要回头查。
+
+---
+
+## 事后量具（读已经跑完的存档，不花钱、不占 GPU）
+
+上面四个是上线前摸底；下面这些是每次玩家报"画面不对"的时候拿来用的。都在编排器那台机器上跑，
+读 `DATA_DIR/sessions/<sid>/session.json`，不给 session id 就取最新的一局。
+
+```bash
+set -a; . /home/ubuntu/kunlun/.env; set +a      # 它们要 settings.data_dir / settings.ffmpeg
+./.venv/bin/python bench/internal_cut_scan.py       [<sid>]
+./.venv/bin/python bench/frame_continuity_check.py  [<sid>]
+```
+
+- **`internal_cut_scan.py`** —— 片子有没有**在自己片内**切镜。判据是**逐帧相邻**相关性里的台阶
+  （某一对相邻帧掉到 0.8 以下，两边还在 0.99），不是"第 0 帧和第 240 帧不像"——后者在 14s 运动镜头
+  上会把 21 拍报成 20 拍。`DESIGN.md` 头表第 10 条就是这个脚本量出来的。
+- **`frame_continuity_check.py`** —— 片子的第 0 帧是不是我们给的那张图。**它看不见上面那条**：
+  `fl2va` 钉住第 0 帧，所以它的答案永远是"对"。两个脚本回答的是不同的问题，别拿一个代替另一个。
+- **`prepare_race_check.py`** —— 纯 stub、不联网，唯一会返回非零退出码的一个：`PREPARE_AHEAD`
+  提前做的活会不会和正式生成打架（重复画图 / 重复编译 IR）。改 `engine.py` 的准备逻辑之后跑它。

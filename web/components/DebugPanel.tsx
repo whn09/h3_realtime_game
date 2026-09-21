@@ -62,7 +62,10 @@ function fmtMs(ms: number): string {
 const STAGES: { key: string; label: string; hint?: string; total?: boolean }[] = [
   { key: "director_total_ms", label: "导演出岔路", hint: "Haiku 4.5，写两个分支" },
   { key: "promptir_wall_ms", label: "提示词编译", hint: "PromptIR，含校验与重修" },
-  { key: "keyframe_ms", label: "关键帧", hint: "SD3.5，只有硬切/重锚/开场才有" },
+  // Normally only beat 0 has this. A drawn image shares no pixels with what the
+  // player is looking at, so every other beat starts from the previous clip's last
+  // frame instead -- `MIDSTORY_KEYFRAMES=1` brings the old behaviour back.
+  { key: "keyframe_ms", label: "关键帧", hint: "SD3.5，通常只有开场那一拍才有" },
   { key: "gpu_upload_ms", label: "上传首帧", hint: "H3_TRANSPORT=http 时恒为 0：H3 自己来拉" },
   { key: "gpu_server_ms", label: "H3 生成", hint: "SGLang 服务端自己报的耗时" },
   { key: "gpu_sglang_ms", label: "H3 提交+轮询", hint: "HTTP 往返，含排队" },

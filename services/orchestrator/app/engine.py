@@ -430,20 +430,48 @@ class Engine:
 
     # -- preparing one beat, without the GPU -------------------------------- #
 
-    def _wants_early_keyframe(self, beat: Beat) -> bool:
-        """Whether this beat's opening image can be drawn before its turn comes.
+    def _chains_from_parent(self, beat: Beat) -> bool:
+        """Will this beat's first frame be the previous clip's last frame?
 
-        Only for a beat the Director already marked as opening on a cut (or the
-        opening beat, which has no parent to continue from). A `continuous` beat
-        is excluded because `_conditioning_frame` may rewrite it to `cut` once the
-        parent's drift is known -- 36% of them do -- and that answer does not
-        exist yet. Drawing for it would be a coin flip on a $0.08 image.
+        The one place that answer is computed, because two things read it and they
+        must not disagree: `_compile_ir` writes the IR's continuity clause from it,
+        and `_wants_early_keyframe` decides whether to spend $0.08 drawing. An IR
+        that promises an unbroken shot alongside a drawn establishing frame is
+        exactly the artefact this all came from.
 
-        The converse never happens: the rewrite only ever goes continuous -> cut,
-        never back, so a beat that reads `cut` here still reads `cut` at
-        production time and the picture is never wasted.
+        It is the early answer, taken before the parent's clip exists. Under the
+        default it is also the final one. With `midstory_keyframes` on, a parent that
+        turns out to have drifted can still flip a continuous beat to a cut inside
+        `_conditioning_frame`, after this has been read -- so that path gets an IR
+        written for the transition the beat used to have.
         """
-        return beat.intent.transition != "continuous" or not beat.parent_id
+        if not beat.parent_id:
+            return False
+        if not settings.midstory_keyframes:
+            return True
+        return beat.intent.transition == "continuous"
+
+    def _wants_early_keyframe(self, beat: Beat) -> bool:
+        """Whether this beat needs an image drawn for it at all, early or late.
+
+        Under the default (`settings.midstory_keyframes` off) the answer is yes for
+        exactly one beat per session: the opening, which has no previous frame to
+        continue from. Every other beat chains, whatever the Director called its
+        transition -- see `_conditioning_frame`.
+
+        With mid-story keyframes on, this is also the early/late question it used to
+        be. It is yes only for a beat the Director already marked as a cut: a
+        `continuous` beat is excluded because `_conditioning_frame` may rewrite it
+        once the parent's drift is known -- 36% of them did -- and that answer does
+        not exist yet, so drawing for it would be a coin flip on a $0.08 image. The
+        rewrite only ever went continuous -> cut and never back, so a beat that
+        reads `cut` here still reads `cut` at production time.
+
+        The inverse of `_chains_from_parent` by construction, not by coincidence: a
+        beat draws its own opening frame exactly when it has no previous frame to
+        continue from.
+        """
+        return not self._chains_from_parent(beat)
 
     async def _compile_ir(self, rt: Runtime, beat: Beat) -> None:
         """Compile this beat's IR into `beat.ir`, exactly once.
@@ -457,7 +485,10 @@ class Engine:
         session = rt.session
         assert session.bible is not None
         compiled = await self.promptir.compile(
-            bible=session.bible, state=beat.state_after, intent=beat.intent
+            bible=session.bible,
+            state=beat.state_after,
+            intent=beat.intent,
+            chained=self._chains_from_parent(beat),
         )
         beat.ir = compiled.ir
         beat.ir_source = compiled.source  # type: ignore[assignment]
@@ -644,33 +675,59 @@ class Engine:
     ) -> str:
         """Resolve the image this beat starts from.
 
-        Continuous beats wait for the parent's last frame -- the single serial
-        edge in the pipeline. Everything else gets a freshly generated keyframe,
-        which is also how re-anchoring pulls the look back to baseline.
+        By default every beat but the opening waits for its parent's last frame --
+        the single serial edge in the pipeline -- and starts from it. The opening
+        draws, and only because it has nothing to continue from.
+
+        The Director's `transition` does not change that, which is the whole of the
+        change: a drawn image and the frame the player is looking at have never seen
+        each other, so splicing them is a visible discontinuity no matter how good
+        the image is. `transition` now describes what happens to the *story* and the
+        IR renders it as camera movement inside one unbroken shot -- see
+        `promptir._continuity_block`. `settings.midstory_keyframes` restores the old
+        behaviour for comparison.
         """
         session = rt.session
         assert session.bible is not None
 
-        if beat.intent.transition == "continuous" and beat.parent_id:
+        # `_chains_from_parent`, not `beat.parent_id`: a beat that is going to draw
+        # its own opening frame has no reason to wait for the parent's, and waiting
+        # anyway would put the one serial edge in the pipeline in front of work that
+        # does not depend on it. Under the default this is every beat but the
+        # opening; with `midstory_keyframes` on it is the continuous ones, which is
+        # what the wait was guarded by before.
+        if self._chains_from_parent(beat):
+            assert beat.parent_id is not None
             self._set_status(rt, beat, BeatStatus.WAITING_FRAME, parent_id=beat.parent_id)
             await rt.frame_event(beat.parent_id).wait()
             parent = session.beats.get(beat.parent_id)
+            have_parent_frame = bool(
+                parent and parent.last_frame_path and Path(parent.last_frame_path).exists()
+            )
             # The re-anchor decision is read *here*, from the parent, rather than
             # from this beat's own copied flag. The Director expands a beat while
             # that beat is still generating, so children are created before the
             # parent's drift is measured -- a flag copied at creation time is
             # always one beat stale. This is the latest possible moment, and by
             # construction it is after the parent's `_check_drift`.
-            if parent and parent.state_after.needs_reanchor:
+            wants_reanchor = settings.midstory_keyframes and bool(
+                parent and parent.state_after.needs_reanchor
+            )
+            if wants_reanchor:
                 log.info("beat %s forced to cut: parent needs re-anchoring", beat.id)
+                # Late enough to be past `_compile_ir`, so the IR it is about to be
+                # sent with was written for the transition it *had*. That is the
+                # cost of correcting drift and the reason this path is now opt-in.
                 beat.intent.transition = "cut"
-                rt.bus.emit("reanchor.forced", beat_id=beat.id, parent_id=parent.id)
-            elif parent and parent.last_frame_path and Path(parent.last_frame_path).exists():
+                rt.bus.emit("reanchor.forced", beat_id=beat.id, parent_id=parent.id)  # type: ignore[union-attr]
+            elif have_parent_frame:
+                assert parent is not None and parent.last_frame_path is not None
                 return parent.last_frame_path
             else:
+                # Not a story decision, a missing file: the parent failed or its
+                # frame was swept. Drawing is the only way to produce anything.
                 log.warning(
-                    "beat %s wanted continuity but parent has no last frame; cutting instead",
-                    beat.id,
+                    "beat %s has no parent frame to continue from; drawing instead", beat.id
                 )
                 beat.intent.transition = "cut"
 
@@ -762,12 +819,13 @@ class Engine:
             # Kept as the fallback anchor and as the session's reference look.
             session.drift_baseline = dict(stats)
 
-        anchored = beat.intent.transition != "continuous" or not beat.parent_id
-        if anchored:
-            # Read after `_conditioning_frame`, so `transition` is what actually
-            # happened rather than what the Director asked for -- a beat forced
-            # to cut by its parent's re-anchor lands here too, which is correct:
-            # it really did start from a fresh keyframe.
+        # Whether an image was drawn, not what the transition says. Those were the
+        # same question when every cut drew; now a `cut` beat normally chains from
+        # its parent like any other, and reading `transition` here would reset the
+        # reference on a beat that never left the chain -- which is the one way to
+        # make a drift meter that can never report drift. `keyframe_path` is written
+        # by `_fresh_keyframe` and by nothing else, so it is the physical fact.
+        if _have_keyframe(beat):
             beat.drift_anchor = dict(stats)
             return
 

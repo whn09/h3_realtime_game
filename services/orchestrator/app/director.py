@@ -253,7 +253,13 @@ def _normalise_options(
 
     # Forced re-anchor wins over whatever the Director asked for: the visual
     # baseline has to be restored on this beat, and only a cut can do it.
-    if state.needs_reanchor:
+    #
+    # Gated, because with mid-story keyframes off there is nothing a cut would
+    # restore -- the beat chains from its parent either way, so this would rewrite
+    # the story's transition (and invent a location change) to buy a visual
+    # correction that is no longer available. Drift is still measured and still
+    # emitted; it just stops steering the Director.
+    if state.needs_reanchor and settings.midstory_keyframes:
         for opt in out.options:
             if opt.transition == "continuous":
                 opt.transition = "cut"

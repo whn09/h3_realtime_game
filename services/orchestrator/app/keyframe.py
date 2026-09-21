@@ -75,9 +75,23 @@ def build_prompt(bible: WorldBible, shot: ShotSpec, state: WorldState) -> str:
     authored once by the Worldsmith precisely so this prompt can be, because the
     image model is measurably more literal with it. The shot fields stay in
     Chinese: the Director writes them per beat, and translating them would mean
-    another model call inside the beat budget. Mixed, then, rather than the
-    previous state of affairs -- a function whose docstring claimed English while
-    passing a ~130-character Chinese style anchor to CLIP.
+    another model call inside the beat budget.
+
+    That compromise does not work, and the measurement is worth keeping even though
+    this function is now only reached when a parent's frame is missing (the opening
+    uses `bible.opening_keyframe_prompt`, which is all English). Same seed, three
+    prompts, correlated as 64x36 greyscale:
+
+        A  as sent, mixed                      A~C 0.800
+        B  the Chinese clauses in English       A~B 0.386
+        C  the Chinese clauses deleted          B~C 0.445
+
+    Deleting the Chinese barely changes the image; translating it changes it a lot.
+    The setting, time of day, mood and genre were therefore contributing nothing,
+    and SD3.5 was inventing an environment out of the character description alone --
+    it answered "门厅到一楼楼梯间，昏黄的壁灯" with an outdoor daylight plaza. So if
+    this path ever becomes common again, the fix is English on the way in
+    (`shot.setting_en` from the Director), not a longer mixed prompt.
     """
     on_screen = characters_in_shot(bible, shot)
     who = [c.appearance_en.strip() for c in on_screen if c.appearance_en.strip()]

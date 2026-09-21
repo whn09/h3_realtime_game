@@ -259,6 +259,30 @@ class Settings:
     # If the image model is unavailable, synthesise a gradient placeholder
     # rather than blocking the session. The story must always start.
     keyframe_fallback: bool = field(default_factory=lambda: _env_bool("KEYFRAME_FALLBACK", True))
+    # Draw a fresh image mid-story, for a beat the Director marked `cut`/`timeskip`
+    # or whose parent drifted?
+    #
+    # Off, and this is the single most consequential default in the file. A drawn
+    # keyframe shares no pixels with the frame the player is looking at, so H3 --
+    # which pins it as frame 0 and is then free to obey the text -- holds the
+    # stranger for a beat and jumps. Measured over one 21-beat session: 7 of the 11
+    # beats that got a drawn keyframe cut away from it inside the first 4 seconds
+    # (median 1.7s), against 0 of 9 beats that chained from the parent's last frame.
+    # It reads as a rendering bug because structurally it is one -- two images that
+    # have never seen each other, spliced.
+    #
+    # It is also where the money and the latency are: ~$0.08 an image against
+    # ~$0.02 of everything else per beat, and 6.3s that a chained beat does not
+    # spend at all. Turning it off is the rare change that is cheaper, faster and
+    # better-looking at once, and what it costs is the re-anchoring mechanism --
+    # drift is now measured and reported but no longer corrected. `bench/chain_drift.py`
+    # is the instrument that says whether that matters over a long chain.
+    #
+    # The opening beat always draws, setting or no setting: there is no previous
+    # frame to continue from, so it is the one image that cannot be avoided.
+    midstory_keyframes: bool = field(
+        default_factory=lambda: _env_bool("MIDSTORY_KEYFRAMES", False)
+    )
 
     # --- Storage / serving ---------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", "./data")))

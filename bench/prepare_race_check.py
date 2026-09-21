@@ -17,9 +17,18 @@ long enough to overlap. No Bedrock, no GPU, no network.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+# Before `app.config` is imported, because `Settings` is frozen and reads the
+# environment exactly once. The race being tested only exists when a beat draws its
+# own image mid-story, which is no longer the default -- a chained beat has nothing
+# to race over. So the scenario has to be switched back on explicitly; without this
+# the script would pass by drawing nothing at all, which is the least useful way for
+# a test to be green.
+os.environ.setdefault("MIDSTORY_KEYFRAMES", "1")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services" / "orchestrator"))
 

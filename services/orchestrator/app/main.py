@@ -118,9 +118,14 @@ async def lifespan(app: FastAPI):
     app.state.store = store
     app.state.hub = hub
     app.state.engine = engine
+    # `midstory_kf` is in here because it is the one setting that changes what the
+    # player sees rather than how fast they see it, and "是不是又在画图" should be
+    # answerable from the first line of the log rather than by reading a beat's
+    # timings after the fact.
     log.info(
-        "orchestrator up: backend=%s slots=%d beat=%.3fs pregen_depth=%d",
+        "orchestrator up: backend=%s slots=%d beat=%.3fs pregen_depth=%d midstory_kf=%s",
         engine.gpu.kind, engine.gpu.slots, settings.beat_seconds, settings.pregen_depth,
+        "on" if settings.midstory_keyframes else "off",
     )
 
     assets: asyncio.Task[None] | None = None

@@ -141,11 +141,40 @@ def _characters_block(chars: list[Character]) -> str:
     )
 
 
-def _continuity_block(intent: BranchIntent, state: WorldState) -> str:
-    if intent.transition == "continuous":
+def _continuity_block(intent: BranchIntent, state: WorldState, chained: bool) -> str:
+    """What to tell the model about how this段 joins the one before it.
+
+    `chained` is the physical fact -- the first frame *is* the previous clip's last
+    frame -- and it is decided by the engine, not by `intent.transition`. The two
+    used to be the same thing; they are not any more, because a story that moves
+    somewhere else is now rendered as a camera that travels there rather than as a
+    splice. Getting this wrong in either direction is the expensive case: telling a
+    chained beat it may re-establish the space is what produced a clip that held its
+    handed-in frame for ~1.7s and then jumped, which reads as a rendering fault.
+    """
+    if chained and intent.transition == "continuous":
         return (
             "衔接要求：这一段的第一帧就是上一段的最后一帧，属于同一个连续镜头的延续。"
             "开场姿态必须承接上一拍的结束姿态，不要重新建立场景、不要重新介绍环境。"
+        )
+    if chained:
+        # The story moves; the camera has to carry the audience there without a cut.
+        # Naming the destination matters more than naming the transition: "cut to a
+        # stairwell" and "walk to the stairwell in one take" describe the same story
+        # beat and only one of them can be started from the frame we are handing in.
+        where = intent.shot.setting or state.location
+        when = (
+            f"（时间推进：{state.elapsed_in_world}）"
+            if intent.transition == "timeskip" and state.elapsed_in_world
+            else ""
+        )
+        return (
+            "衔接要求：这一段的第一帧就是上一段的最后一帧。整段必须是**一个不间断的长镜头**——"
+            "不许出现剪辑点、黑场、淡入淡出或跳切。"
+            f"故事要在这一段之内转移到「{where}」{when}，"
+            "所以请用镜头运动或人物移动把观众带过去："
+            "跟随人物走过去、镜头摇过去或推过去、穿过门与走廊，都可以。"
+            "开场姿态必须承接上一拍的结束姿态，不要重新建立场景。"
         )
     if intent.transition == "timeskip":
         return (
@@ -216,6 +245,11 @@ class PromptIR:
         state: WorldState,
         intent: BranchIntent,
         seconds: float | None = None,
+        # Whether this beat's first frame will be the previous clip's last frame.
+        # The engine owns that decision -- it depends on whether a parent frame
+        # exists at all, which this side cannot see -- and the default is the common
+        # case. Only the opening beat passes False under the standard settings.
+        chained: bool = True,
     ) -> CompiledIR:
         seconds = seconds or settings.beat_seconds
         desc_only = settings.ir_template_tail
@@ -242,7 +276,7 @@ class PromptIR:
             style_anchor=bible.style_anchor,
             music_bible=bible.music_bible,
             ambience=bible.ambience,
-            continuity_block=_continuity_block(intent, state),
+            continuity_block=_continuity_block(intent, state, chained),
             dialogue_budget=budget,
             seconds=seconds,
             desc_only=desc_only,
