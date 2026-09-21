@@ -21,6 +21,7 @@ import hashlib
 import heapq
 import itertools
 import logging
+import os
 import socket
 import time
 from dataclasses import dataclass, field
@@ -927,7 +928,11 @@ async def _postprocess(video: Path, last: Path, poster: Path) -> dict[str, float
     measurement are computed identically no matter which backend produced the mp4
     -- if the fake backend and the GPU disagreed here, every drift number
     measured without a GPU would be unusable.
+
+    It also makes the clip streamable before anyone is told it exists, which is
+    the only moment where that is free.
     """
+    await _faststart(video)
     # No `-frames:v 1`: with `-sseof` that flag grabs the *first* frame of the
     # tail window, not the last frame of the clip. `-update 1` overwrites instead,
     # so the final decoded frame is the one left in the file.
@@ -939,6 +944,69 @@ async def _postprocess(video: Path, last: Path, poster: Path) -> dict[str, float
     await _run([settings.ffmpeg, "-y", "-loglevel", "error", "-i", str(video),
                 "-frames:v", "1", "-q:v", "3", str(poster)])
     return await asyncio.to_thread(_frame_stats, last) if last.exists() else None
+
+
+async def _faststart(video: Path) -> bool:
+    """Move `moov` to the front of the file, if the encoder left it at the back.
+
+    H3 writes its mp4 in the order a one-pass encoder naturally can: `mdat` first,
+    `moov` last. That file is perfectly valid, and over the ssh tunnel it is also a
+    failure mode -- the player cannot decode a single frame until it has the index,
+    so it issues a second range request for the tail of a 1.7MB file and only then
+    starts buffering. On a link that is fine that is one extra round trip; on a
+    link that is flapping it is an extra chance to hang with a black frame, which
+    is exactly what it looked like.
+
+    A `-c copy` remux, so no pixels are touched and the cost is I/O on a couple of
+    megabytes. Replaced atomically, and on any failure the original is kept: a
+    clip that needs an extra round trip beats no clip.
+    """
+    if not await asyncio.to_thread(_moov_after_mdat, video):
+        return False
+    t0 = time.perf_counter()
+    tmp = video.with_suffix(".fast.mp4")
+    code, err = await _run([settings.ffmpeg, "-y", "-loglevel", "error", "-i", str(video),
+                            "-c", "copy", "-movflags", "+faststart", str(tmp)])
+    if code != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+        log.warning("faststart remux failed for %s: %s", video.name, err[-200:])
+        tmp.unlink(missing_ok=True)
+        return False
+    await asyncio.to_thread(os.replace, tmp, video)
+    log.info("faststart %s in %.0fms", video.parent.name, (time.perf_counter() - t0) * 1000.0)
+    return True
+
+
+def _moov_after_mdat(path: Path) -> bool:
+    """Walk the top-level atoms and report which of `moov` / `mdat` comes first.
+
+    Cheaper and more honest than remuxing unconditionally: the fake backend
+    already writes `+faststart`, and a clip that is already streamable should cost
+    nothing. Anything unparseable answers False -- ffmpeg is better at deciding
+    what a malformed mp4 is than this loop is.
+    """
+    try:
+        with path.open("rb") as fh:
+            while True:
+                head = fh.read(8)
+                if len(head) < 8:
+                    return False
+                size = int.from_bytes(head[:4], "big")
+                kind = head[4:8]
+                if kind == b"moov":
+                    return False
+                if kind == b"mdat":
+                    return True
+                if size == 1:                     # 64-bit size in the next 8 bytes
+                    size = int.from_bytes(fh.read(8), "big")
+                    if size < 16:
+                        return False
+                    fh.seek(size - 16, os.SEEK_CUR)
+                elif size < 8:                    # 0 = "to end of file", or garbage
+                    return False
+                else:
+                    fh.seek(size - 8, os.SEEK_CUR)
+    except OSError:
+        return False
 
 
 async def _run(cmd: list[str]) -> tuple[int, str]:

@@ -135,7 +135,10 @@ HEAD_EOF
       echo "  launchd agent not installed (run: bash $0 up)"
     fi
     pgrep -f "L $FORWARD" >/dev/null && echo "  ssh forward alive" || echo "  no ssh forward"
-    curl -s -o /dev/null -m 5 -w "  healthz http=%{http_code}\n" "http://127.0.0.1:$PORT/healthz"
+    # -m 10, not 5: a healthy tunnel over this VPN has been measured answering
+    # /healthz in 2.3s, and a `http=000` that means "slow" reads as "dead".
+    curl -s -o /dev/null -m 10 -w "  healthz http=%{http_code} in %{time_total}s\n" \
+      "http://127.0.0.1:$PORT/healthz"
     ;;
 
   log)

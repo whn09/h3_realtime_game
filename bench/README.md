@@ -88,6 +88,7 @@ python chain_drift.py --wrapper http://127.0.0.1:8000 --beats 8
 set -a; . /home/ubuntu/kunlun/.env; set +a      # 它们要 settings.data_dir / settings.ffmpeg
 ./.venv/bin/python bench/internal_cut_scan.py       [<sid>]
 ./.venv/bin/python bench/frame_continuity_check.py  [<sid>]
+./.venv/bin/python bench/faststart_check.py         [<beat.mp4>]
 ```
 
 - **`internal_cut_scan.py`** —— 片子有没有**在自己片内**切镜。判据是**逐帧相邻**相关性里的台阶
@@ -95,5 +96,8 @@ set -a; . /home/ubuntu/kunlun/.env; set +a      # 它们要 settings.data_dir / 
   上会把 21 拍报成 20 拍。`DESIGN.md` 头表第 10 条就是这个脚本量出来的。
 - **`frame_continuity_check.py`** —— 片子的第 0 帧是不是我们给的那张图。**它看不见上面那条**：
   `fl2va` 钉住第 0 帧，所以它的答案永远是"对"。两个脚本回答的是不同的问题，别拿一个代替另一个。
-- **`prepare_race_check.py`** —— 纯 stub、不联网，唯一会返回非零退出码的一个：`PREPARE_AHEAD`
+- **`faststart_check.py`** —— 片子能不能边下边播。拷一份到 `/tmp` 再验（不动存档）：remux 前后
+  `moov`/`mdat` 的顺序、帧数与时长一字不差、以及第二遍是空操作（已经是 faststart 的片子不该再花钱）。
+  `-c copy` 实测 65ms。**它也会失败**（返回 1），所以改 `_postprocess` 之后值得跑一次。
+- **`prepare_race_check.py`** —— 纯 stub、不联网，另一个会返回非零退出码的：`PREPARE_AHEAD`
   提前做的活会不会和正式生成打架（重复画图 / 重复编译 IR）。改 `engine.py` 的准备逻辑之后跑它。

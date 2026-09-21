@@ -51,7 +51,11 @@ launchd-spawned process has no TCC grant, so it cannot read `~/Documents` at all
   fails with `Operation not permitted`, twice, and then launchd throttles it.
 
 `status` prints launchd's `runs` counter: a number that climbs on its own is a
-flapping network, not a broken config.
+flapping network, not a broken config. It also prints how long `/healthz` took,
+with a 10s timeout rather than 5s -- a healthy tunnel here has been measured
+answering in 2.3s, and the same minute gave 107KB/s and then 670KB/s on the same
+1.7MB clip. Slow is not the same as dead, and this is a link where both happen.
+The clips are remuxed `+faststart` for exactly that reason (DESIGN.md 5.1).
 
 ## The tunnels on the box are off
 
