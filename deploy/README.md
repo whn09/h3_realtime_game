@@ -10,6 +10,8 @@ file here changes nothing until it is put back (`sudo install -m 644 …`,
     h3-tunnel.sh           /home/ubuntu/kunlun/h3-tunnel.sh         (disabled)
     game_tunnel.sh         /home/ubuntu/kunlun/game_tunnel.sh       (the old laptop-era script)
 
+`local_proxy.sh` is the exception: it runs **on the laptop**, not on the box.
+
 ## Three hosts, and which direction each door opens
 
     laptop ──ssh -L 8100───► orchestrator 172.31.42.3 ──http──► P5-1 172.31.45.68:30010
@@ -27,7 +29,31 @@ rather than having it pushed to them over ssh.
 Verified from P5-1: `GET /<session>/kf-….png` → 200, `POST` → 405,
 `GET :8100/healthz` → no route.
 
-## The tunnels are off
+## The one tunnel that is on: laptop → orchestrator
+
+    bash deploy/local_proxy.sh up | status | log | down
+
+A launchd agent (`~/Library/LaunchAgents/com.h3game.proxy.plist`) holding
+`-L 8100:127.0.0.1:8100`. It is supervised because an unsupervised one demonstrably
+does not survive this laptop: `pmset -g log` showed four `Maintenance Sleep`
+cycles inside ten minutes on battery, and the default route is a VPN (`utun4`)
+whose reconnects drop every TCP connection under it. ssh notices and exits within
+~45s (`ServerAliveInterval=15` × 3); `KeepAlive` is the half that was missing.
+Measured recovery from a `kill -9`: **9s**, with no one watching.
+
+Two details are macOS-specific and both come from the same fact -- a
+launchd-spawned process has no TCC grant, so it cannot read `~/Documents` at all:
+
+* the plist execs `/usr/bin/ssh` directly, with the flags inline, rather than
+  running a wrapper script out of the repo;
+* the key is copied once to `~/.ssh/henanwan-us-east-2.pem` (mode 600) because the
+  original lives under `~/Documents/account/…`. Pointing the agent at the original
+  fails with `Operation not permitted`, twice, and then launchd throttles it.
+
+`status` prints launchd's `runs` counter: a number that climbs on its own is a
+flapping network, not a broken config.
+
+## The tunnels on the box are off
 
 `h3-tunnel@30010` / `@30011` forwarded a local port to each GPU box's loopback,
 back when SGLang bound `127.0.0.1`. Both now bind `0.0.0.0`, `H3_REPLICAS` names
