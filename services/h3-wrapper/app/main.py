@@ -256,6 +256,9 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
 
     return GenerateResponse(
         job_id=job_id,
+        # Read back out of the payload, not recomputed: this is the field SGLang
+        # was handed, so it cannot disagree with what was generated.
+        prompt=str(payload.get("prompt", "")),
         video_url=video_url,
         video_path=str(video_dest),
         last_frame_url=last_url,

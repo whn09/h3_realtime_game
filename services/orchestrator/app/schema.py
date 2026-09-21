@@ -33,20 +33,87 @@ ShotType = Literal["wide", "medium", "closeup", "pov", "tracking", "aerial"]
 
 
 class IRSections(BaseModel):
-    """Mirror of h3-wrapper's `IRSections`. Kept as a separate declaration
-    because these are separate services; the wrapper owns the joining rule."""
+    """The three core fields of MiniMax H3's documented prompt format.
+
+    Mirror of h3-wrapper's `IRSections`, kept as a separate declaration because
+    these are separate services -- and the assembly has to live on both sides,
+    because under `GPU_BACKEND=h3` (the live path) the orchestrator talks to
+    SGLang directly and the wrapper is not in the loop at all.
+
+    The shape is `docs/h3official/base-en.txt` section 2.2, quoted from MiniMax's
+    own `h3-prompt-writing` skill, whose first instruction is *"Preserve the exact
+    field names, section order, labels, and timing notation"*:
+
+        integrated_multimodal_description: [Shot 1] ...
+        <blank>
+        overall_soundscape: ...
+        <blank>
+        non_diegetic_music: ...
+
+    All three labels, always. SGLang tokenizes this verbatim -- no chat template,
+    no rewriter -- so an omitted `overall_soundscape` does not buy silence, it
+    buys whatever the model invents for a field it was not given. `N/A` is the
+    documented way to ask for nothing (sections 4.6 / 4.7).
+    """
 
     description: str
     soundscape: str | None = None
     music: str | None = None
 
-    def to_prompt(self) -> str:
-        parts = [self.description]
-        if self.soundscape:
-            parts.append(self.soundscape)
-        if self.music:
-            parts.append(self.music)
-        return "\n".join(p.strip() for p in parts)
+    def core_fields(self) -> str:
+        """Part two of the final prompt: the three labelled fields, in order."""
+        return "\n\n".join(
+            f"{label}: {(text or '').strip() or 'N/A'}"
+            for label, text in (
+                ("integrated_multimodal_description", self.description),
+                ("overall_soundscape", self.soundscape),
+                ("non_diegetic_music", self.music),
+            )
+        )
+
+    def final_prompt(
+        self, *, first_frame: bool = False, last_frame: bool = False, seconds: float = 15.0
+    ) -> str:
+        """The exact string H3's text tower reads.
+
+        Part one is the keyframe-alignment instruction, quoted verbatim from
+        section 2.1, which is emphatic about placement: *"The instruction must be
+        the first line of the final prompt, followed by one blank line before the
+        core fields."* T2VA has none.
+
+        Which line is decided by **the frames actually attached**, not by the task
+        name. Every beat this game generates goes out as `fl2va` -- that is what
+        the replicas serve -- while attaching only a first frame, and emitting the
+        FL2VA line there would promise a `Picture 2` that does not exist, which
+        the skill's output rules call an unresolved reference label. One picture at
+        0.00s *is* the I2VA case, so it gets the I2VA line.
+
+        `S.SS` is the effective duration to exactly two decimals; `N` is the index
+        of the final shot, which is 1 here because a beat is one shot by
+        construction -- one action, no cuts (DESIGN.md 3.1).
+        """
+        s = f"{seconds:.2f}"
+        instruction: str | None
+        if first_frame and last_frame:
+            instruction = (
+                "How the reference pictures align with the target video — "
+                "Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; "
+                f"Picture 2 (from Shot 1) aligns with the {s}-second mark of the target video."
+            )
+        elif first_frame:
+            instruction = (
+                "For the target video, at 0.00 seconds into the target video, "
+                "<Picture 1> (from [Shot 1]) is fully referenced."
+            )
+        elif last_frame:
+            instruction = (
+                "How the reference pictures align with the target video — "
+                f"<Picture 1> (from [Shot 1]) aligns with the {s}-second mark of the target video."
+            )
+        else:
+            instruction = None
+        core = self.core_fields()
+        return f"{instruction}\n\n{core}" if instruction else core
 
 
 # --------------------------------------------------------------------------- #
@@ -73,6 +140,16 @@ class Character(BaseModel):
     # half-Chinese prompt.
     appearance_en: str = ""
     voice: str = ""
+    # The voice in English, for the speaker-identity phrase H3 wants outside the
+    # `<d>` block (`docs/h3official/base-en.txt` section 4.4: character type, age,
+    # gender, pitch, timbre, speaking rate, accent). That phrase sits in English
+    # prose, so a Chinese `voice` cannot go there -- and §4.4 is explicit that only
+    # the language tag and the spoken words belong *inside* `<d>`.
+    #
+    # Empty degrades to a bare `The speaker (S1)`, which still carries the ID and
+    # so still keeps the character's voice stable across beats; it just gives H3
+    # nothing to pick a timbre from.
+    voice_en: str = ""
     arc: str = ""
 
 
@@ -122,6 +199,13 @@ class WorldBible(BaseModel):
     # Frozen musical grammar (BPM, key, instrumentation, emotional baseline).
     music_bible: str = ""
     ambience: str = ""
+    # The same two in English, because `non_diegetic_music` and
+    # `overall_soundscape` are English fields in H3's documented format and these
+    # are the frozen text those fields are built from. Empty on bibles written
+    # before the format switch: `prompts.template_*` then falls back to the Chinese
+    # original, which is what the model used to get for every beat anyway.
+    music_bible_en: str = ""
+    ambience_en: str = ""
     pov: Pov = "third"
     protagonist_id: str = ""
     characters: list[Character] = Field(default_factory=list)

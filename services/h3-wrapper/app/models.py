@@ -17,24 +17,50 @@ ConditionRole = Literal["keyframe", "reference"]
 
 
 class IRSections(BaseModel):
-    """The three sections of MiniMax H3's documented IR format.
+    """The three core fields of MiniMax H3's documented prompt format.
 
-    PromptIR emits these separately; H3 wants them joined by a single newline.
-    Joining here (rather than in the orchestrator) keeps the separator rule in
-    one place, since getting it wrong is a silent quality regression.
+    PromptIR emits them separately; this is where they become the string the text
+    tower reads. The assembly rule lives here rather than in the orchestrator
+    because getting it wrong is a silent quality regression -- SGLang tokenizes
+    the `prompt` verbatim (no chat template, no rewriter, no length
+    normalisation), so **whatever we send IS the IR**.
+
+    The shape is not ours to choose. `docs/h3official/base-en.txt` section 2.2,
+    which is `references/base-en.txt` of MiniMax's own `h3-prompt-writing` skill:
+
+        integrated_multimodal_description: [Shot 1] ...
+        <blank>
+        overall_soundscape: ...
+        <blank>
+        non_diegetic_music: ...
+
+    Three things about that are load-bearing and were all missing before:
+
+    * **The field names.** Without them H3 reads three unlabelled paragraphs and
+      has to guess which is which; the audio branch is conditioned by the same
+      text as the video branch, so a mislabelled section is a mis-scored clip.
+    * **The blank line.** A single `\\n` is what separates sentences inside a
+      field, so joining fields with one merges them.
+    * **All three fields, always.** A prompt that omits `overall_soundscape` or
+      `non_diegetic_music` does not get silence -- it gets whatever the model
+      invents. `N/A` is the documented way to ask for nothing (sections 4.6/4.7),
+      so an absent section becomes an explicit `N/A` rather than an absent field.
     """
 
     description: str = Field(..., description="integrated_multimodal_description")
     soundscape: str | None = Field(None, description="overall_soundscape")
     music: str | None = Field(None, description="non_diegetic_music")
 
-    def to_prompt(self) -> str:
-        parts = [self.description]
-        if self.soundscape:
-            parts.append(self.soundscape)
-        if self.music:
-            parts.append(self.music)
-        return "\n".join(p.strip() for p in parts)
+    def core_fields(self) -> str:
+        """Part two of the final prompt: the three labelled fields, in order."""
+        return "\n\n".join(
+            f"{label}: {(text or '').strip() or 'N/A'}"
+            for label, text in (
+                ("integrated_multimodal_description", self.description),
+                ("overall_soundscape", self.soundscape),
+                ("non_diegetic_music", self.music),
+            )
+        )
 
 
 class ReferenceSpec(BaseModel):
@@ -90,8 +116,60 @@ class GenerateRequest(BaseModel):
             raise ValueError("`ir` and `prompt` are mutually exclusive")
         return self
 
+    def alignment_instruction(self) -> str | None:
+        """Part one of the final prompt: the keyframe-alignment instruction.
+
+        Quoted verbatim from `docs/h3official/base-en.txt` section 2.1, which is
+        emphatic about the placement -- *"The instruction must be the first line of
+        the final prompt, followed by one blank line before the core fields."*
+        T2VA has no instruction at all.
+
+        Chosen by **which frames are actually attached**, not by `task`. The two
+        are not the same question: every beat this game generates is sent as
+        `fl2va` (that is what the replicas serve) while attaching only a first
+        frame, and emitting the FL2VA line there would promise a `Picture 2` that
+        does not exist -- an unresolved reference label, which the skill's own
+        output rules list as a thing to avoid. One picture at 0.00s *is* the I2VA
+        case, so it gets the I2VA line.
+
+        `S.SS` is the effective duration to exactly two decimal places, and `N`
+        the index of the final shot -- 1 here, because a beat is one shot by
+        construction (one action, no cuts).
+        """
+        s = f"{self.seconds:.2f}"
+        if self.first_frame and self.last_frame:
+            return (
+                "How the reference pictures align with the target video — "
+                "Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; "
+                f"Picture 2 (from Shot 1) aligns with the {s}-second mark of the target video."
+            )
+        if self.first_frame:
+            return (
+                "For the target video, at 0.00 seconds into the target video, "
+                "<Picture 1> (from [Shot 1]) is fully referenced."
+            )
+        if self.last_frame:
+            return (
+                "How the reference pictures align with the target video — "
+                f"<Picture 1> (from [Shot 1]) aligns with the {s}-second mark of the target video."
+            )
+        return None
+
     def resolved_prompt(self) -> str:
-        return self.ir.to_prompt() if self.ir else (self.prompt or "")
+        """The exact string SGLang will tokenize.
+
+        `prompt` is the escape hatch and is passed through untouched: a caller
+        that hands us a finished prompt (the benches, a ref2va experiment) has
+        already made every formatting decision, and re-wrapping it would silently
+        edit an input meant to be exact.
+        """
+        if self.prompt is not None:
+            return self.prompt
+        if self.ir is None:
+            return ""
+        instruction = self.alignment_instruction()
+        core = self.ir.core_fields()
+        return f"{instruction}\n\n{core}" if instruction else core
 
 
 class Timings(BaseModel):
@@ -147,6 +225,11 @@ class FrameStats(BaseModel):
 
 class GenerateResponse(BaseModel):
     job_id: str
+    # The exact string that was tokenized, assembled instruction line and all.
+    # Returned so the caller archives the bytes H3 actually saw rather than its own
+    # guess at what this service would build from the same IR -- the two live in
+    # different repos and the only way to keep them honest is to compare them.
+    prompt: str = ""
     video_url: str
     video_path: str
     last_frame_url: str | None = None

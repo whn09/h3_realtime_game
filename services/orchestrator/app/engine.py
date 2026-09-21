@@ -484,18 +484,24 @@ class Engine:
             return
         session = rt.session
         assert session.bible is not None
+        chained = self._chains_from_parent(beat)
         compiled = await self.promptir.compile(
             bible=session.bible,
             state=beat.state_after,
             intent=beat.intent,
-            chained=self._chains_from_parent(beat),
+            chained=chained,
         )
         beat.ir = compiled.ir
         beat.ir_source = compiled.source  # type: ignore[assignment]
         beat.ir_violations = compiled.violations
         beat.timings.update(compiled.timings)
         self.store.write_ir(
-            session.id, beat.id, compiled.ir.to_prompt(),
+            session.id, beat.id,
+            # The best guess available at compile time. Whether a conditioning frame
+            # still exists when the request goes out is decided later and by the
+            # backend, so `_generate` rewrites this with the string that was really
+            # sent; see `Store.rewrite_ir_prompt`.
+            compiled.ir.final_prompt(first_frame=chained, seconds=settings.beat_seconds),
             {
                 "source": compiled.source,
                 "attempts": compiled.attempts,
@@ -640,6 +646,13 @@ class Engine:
             beat.degraded = result.degraded
             beat.timings.update(result.timings)
             beat.timings["beat_wall_ms"] = round((time.perf_counter() - started) * 1000.0, 1)
+            # Replace the compile-time guess with the string the backend really
+            # tokenized. The two differ whenever the conditioning frame did not
+            # survive to the request -- `_conditioning_frame` can come back empty
+            # and the backend then sends the t2va form, with no alignment
+            # instruction -- and the archived IR is the only place anyone looks when
+            # a beat comes out wrong.
+            self.store.rewrite_ir_prompt(session.id, beat.id, result.prompt)
 
             self._check_drift(rt, beat)
             # Start moving this frame to the GPU boxes now rather than when a

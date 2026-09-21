@@ -5,7 +5,7 @@
 
 设计文档版本 v0.2 · 2026-09-21（v0.1 写于实现之前，本版按实测与实际落地改写）
 
-**v0.2 改了什么 —— 十件被实测推翻的事**
+**v0.2 改了什么 —— 十一件被实测推翻的事**
 
 | # | v0.1 怎么写的 | 实际是什么 | 影响 |
 |---|---|---|---|
@@ -19,6 +19,7 @@
 | 8 | depth-2 投机展开是"算力富余后的平滑升级"，能把窗口翻倍 | 2 槽下**实测更慢**：玩家感到的停顿从 1.8s 变成 10.8s，已回退。救回窗口的是不占槽的 `PREPARE_AHEAD` | 2.3 杠杆 4/5 换了个方向：该问的不是"要不要更多 GPU"，是"哪些事不需要 GPU、可以提前做" |
 | 9 | 降级主旋钮是 `num_inference_steps 50→32` + `quality` 三档 | 步数被蒸馏固定成 **8**，发别的值服务端直接报错；`quality` 也不认。**唯一诚实的旋钮是片长**，且落在 `5 + 17k` 帧格子上 | 第 7 节的降级表按实际重写 |
 | 10 | 硬切时用 SD3.5 新画一张关键帧，让图像模型去重建场景 | **画出来的那张图和玩家正在看的画面没有一个像素是共享的**，H3 把它钉在第 0 帧、然后就自由地去听文字了——于是它在片内自己切一刀。实测同一局 21 拍：画了图的 11 拍有 **7 拍在开场 4s 内硬切**（中位 1.7s），接父末帧的 9 拍是 **0/9** | **除开场外不再画图**（`MIDSTORY_KEYFRAMES=0`）。3.2 节整节重写：`transition` 从此描述**故事**而不是剪辑，换地方由镜头运动在片内完成。图像成本从九成降到接近零（第 9 节） |
+| 11 | "IR 三段拼起来就是 prompt"——格式当成我们自己的约定 | H3 有一份**官方格式**（MiniMax 的 `h3-prompt-writing` skill，已 vendor 到 `docs/h3official/`）：对齐指令 + 三个带标签的字段 + 台词必须套 `<d>[语言] …</d>`。我们少了对齐指令、台词直接写成中文散文——**玩家听到的是"人声形状的噪声"**，口型对得上但不是任何语言 | 3.6 是新的一节。拼装/生成/校验三层都按指南重写（5.2 末），`bench/test_h3_format.py` 拿指南的 Case 2 当 oracle |
 
 没改的部分就是仍然成立的部分：核心循环（第 1 节）、世界状态契约（第 4 节）都没被实测推翻；
 第 3 节的连续性**策略**成立（末帧衔接是对的），但它的例外条款（硬切重画）被第 10 条推翻了；
@@ -128,10 +129,14 @@
 1. ✅ **PromptIR 降到 ≤5s —— 做完了，8.1s → 4.57s**
 
    下面这段分析是对的，结论也兑现了：真正的墙是 decode，砍输出 token 是最划算的一刀。
-   落地的两条是 prompt caching 和 `IR_TEMPLATE_TAIL=1`（只生成
-   `integrated_multimodal_description`，声景和配乐从世界圣经模板填充——顺带让每拍的音乐描述
-   逐字相同，正好是 3.5 节要的东西）。蒸馏到本地小模型那条没做，也不再急：PromptIR 已经不是
-   最大的一项了。
+   落地的两条是 prompt caching 和 `IR_TEMPLATE_TAIL=1`（`non_diegetic_music` 由世界圣经模板填充，
+   不让 LLM 写——顺带让每拍的音乐描述逐字相同，正好是 3.5 节要的东西）。蒸馏到本地小模型那条
+   没做，也不再急：PromptIR 已经不是最大的一项了。
+
+   **这个旋钮后来收窄了一半：`overall_soundscape` 收回给模型写了。** 分界不是随手划的——
+   配乐没有任何逐拍输入（就是世界的音乐语法加一层张力浓淡），所以 LLM 只是在花 token；
+   而声景有逐拍输入（Director 的 `sfx_focus`），且那个输入是中文，要变成 §4.6 要的
+   1–4 个英文句子，只有模型能做。
 
    先把 8.1s 拆开，否则会优化错地方：
 
@@ -144,7 +149,7 @@
    **结论：prompt caching 只省 prefill，8.1s → 约 6–7s。该开（成本 $0.013→$0.005，且每拍间隔 19s ≪ 5min TTL，命中率近 100%），但它不解决延迟。真正的墙是 decode，只跟输出长度和吐字速度有关。**
 
    按性价比排的 decode 杠杆：
-   - **砍输出 token（最划算）**：`overall_soundscape` 与 `non_diegetic_music` 基本由世界圣经的 `musicBible` 冻结，每拍差异极小 → 让 LLM **只生成 `integrated_multimodal_description`**，另两段模板填充。输出量 −40%，decode 降到 3–4s
+   - **砍输出 token（最划算）**：`non_diegetic_music` 基本由世界圣经的 `musicBible` 冻结，每拍差异极小 → 模板填充，不让 LLM 写。decode 降到 3–4s。（当初这一刀还砍掉了 `overall_soundscape`，后来退回去了，见上面那段）
    - **两个分支并发**调用 Bedrock（8.1s 是单次延迟，不是两次之和）
    - ⬜ **待核实：Bedrock 的 latency-optimized inference 能否用在这条路上。** 我之前写过"Haiku 4.5 支持、通常 +30–60% decode 吞吐"，这个说法我核不实，先撤回：(a) 官方的 Fast Mode 是 Claude API 侧的能力，且只覆盖 Opus 5 / Opus 4.8，不含 Bedrock、不含 Haiku；(b) Bedrock 自己的 latency-optimized 开关是另一回事，但我们推荐走的 Anthropic SDK Mantle client 路径并不暴露它。**结论：把它当成一个待验证项而不是既有杠杆**——如果要用，得先确认该 region + Haiku 4.5 是否在支持列表里，以及是否要为此改用 boto3 Converse（那会牺牲 SDK 侧的 prompt caching 写法一致性）。不要把时间预算押在这条上。
    - 限制 `max_tokens` 并在 prompt 里给出长度上界，不让模型自由发挥
@@ -254,6 +259,12 @@
 }
 ```
 
+**光把图挂上去是不够的**：提示词第一行必须告诉模型这张图对应目标视频的哪一瞬间，否则我们是把一张
+条件帧丢过去、却没说它是开头（`docs/h3official/base-en.txt` §2.1）。挂了首帧就写
+`For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.`，
+正文里也要真的提到 `<Picture 1>` 并说清它保留了什么（人、衣着、机位、布景）。这一行以前是缺的，
+它是下面那条"片子中途自己切一刀"的嫌疑之一——还没有实测结论。
+
 成片取回之后，**编排器本地**（不是 GPU 机上）`ffmpeg -sseof -0.1 -i beat.mp4 -frames:v 1 last.png`，
 末帧图同时用于：① 下一段的首帧条件 ② 前端片尾定格的底图（与视频末帧像素级一致，零跳变）。
 **一次抽帧，两个用途**，而且第二个用途也是第一个用途的验证工具：
@@ -336,8 +347,10 @@ H3 读中文没问题，SD3.5 不读，这个**不对称**才是那张图走样�
 
 H3 每段自带音频，段落边界会有音乐断点。三层处理，只做到了第一层：
 
-1. ✅ 世界圣经冻结 `music_bible`（BPM、调性、编制、情绪基线），每段 IR 的 `non_diegetic_music` 字段
-   复用同一描述 → 风格连贯。`IR_TEMPLATE_TAIL=1` 让它变成**逐字相同**，比原计划更强
+1. ✅ 世界圣经冻结 `musicBibleEn`（编制、速度、节奏型、力度变化），每段 IR 的 `non_diegetic_music`
+   字段复用同一描述 → 风格连贯。`IR_TEMPLATE_TAIL=1` 让它变成**逐字相同**，比原计划更强。
+   张力只加一层力度上的浓淡（`with the low register swelling…`），不写情绪词——§4.7 明确禁止抽象
+   情绪词，而且换了乐器就等于换了一段音乐，接缝会更响
 2. ⬜ **前端叠一条持续不断的低音量音床** —— 没做，而且这条得重新想。配乐是**烤进每段影像里**的，
    不是独立轨，所以第二条音床会和片内配乐打架而不是掩盖接缝。这个约束还连带否掉了 v0.1 的
    4s 静止定格（见 2.2）
@@ -345,6 +358,33 @@ H3 每段自带音频，段落边界会有音乐断点。三层处理，只做�
    所以这两件事得一起决定
 
 ⬜ 接缝到底有多明显还没量化（第 8 节第 7 项），所以上面两条该不该做也还没有依据。
+
+### 3.6 台词：不套那层壳，出来的就是听不懂的人声
+
+这条是实测出来的，症状很具体：视频里的人在说话，口型对得上，但**说的不是任何语言**。
+
+原因是我们一直把台词当场景描述写：`林清枢（清冷的女声）说：「这里有人来过。」`。对 H3 来说这句话和
+"门上有一道划痕"没有区别——它只知道画面里该有个人在说话的样子，不知道**该说出哪几个字**，
+音频分支于是生成一段"人声形状的噪声"。`docs/h3official/base-en.txt` §4.4 的语法才是那个标记：
+
+```
+…the young woman with a cool, slightly hoarse voice (S1) says: <d>[Chinese] 这里有人来过。</d>
+```
+
+三个部分各有各的职责，错一个就退化：
+
+- `<d>[语言] …</d>`：**壳里面只放语言标签和要念出来的字，逐字，不翻译、不改写。** 这是"念出来"
+  和"描述一下"的唯一分界
+- 说话人身份、语气、动作写在壳**外面**，而且是英文（正文全英文）——所以世界圣经需要 `voiceEn`，
+  中文音色描述没法嵌进英文句子
+- `(S1)` 是跨拍稳定的说话人 ID，按"主角优先、其余按圣经顺序"在代码里定，不是让模型现编的
+
+**这三段是代码拼的，不是模型写的**（`promptir.dialogue_clauses`），和 styleAnchor 同一个道理：
+实测把一段冻结文本交给 Haiku "原样引用"，它只能复现 48–81%。校验器把"这个子串逐字活下来"
+列为 fatal（`ir_validator.r_dialogue_verbatim`），没活下来就重编译。
+
+还有一条同源的小规则：`<d>` 里的任何一个 token 不能混写系统——`不止2次` 要写成 `不止二次`，
+否则模型会在阿拉伯数字那儿念一串别的东西。
 
 ---
 
@@ -360,8 +400,12 @@ interface WorldBible {
   premise: string;            // 用户原始输入
   genre: string;              // 末日 / 现代都市 / 修仙 / ...
   logline: string;            // 一句话故事
-  styleAnchor: string;        // 冻结的视觉语法，逐字注入每个 IR
+  styleAnchor: string;        // 冻结的视觉语法（中文，给人看、给 Director 参考）
+  styleAnchorEn: string;      // 同一件事的英文版，**这一版才真正进视频提示词**
   musicBible: string;         // 冻结的音乐语法
+  musicBibleEn: string;       // 英文版，1-2 个完整句子，进 non_diegetic_music
+  ambience: string;           // 环境音底噪
+  ambienceEn: string;         // 英文版，1-2 个完整句子，进 overall_soundscape
   protagonist: Character;     // 玩家扮演谁（第一人称 POV 还是第三人称跟随）
   pov: 'first' | 'third';
   characters: Character[];    // 角色外观圣经，防漂移
@@ -372,8 +416,10 @@ interface WorldBible {
 
 interface Character {
   id: string; name: string;
-  appearance: string;   // 逐字复用，不允许 Director 改写
-  voice: string;        // 音色描述，给 IR 的对白用
+  appearance: string;   // 中文，逐字复用，不允许 Director 改写
+  appearanceEn: string; // 英文版：进视频提示词，也是 SD3.5 重画这个人时唯一的依据
+  voice: string;        // 音色描述（中文）
+  voiceEn: string;      // 英文名词短语，嵌在台词壳外面当说话人身份（§4.4）
   arc: string;
 }
 
@@ -524,6 +570,7 @@ v0.1 要求"必须自己写一层"。写了骨架（`services/h3-wrapper`）但�
 | v0.1 要 wrapper 做的 | 实际在哪做 |
 |---|---|
 | 组装 `/v1/videos` 请求 | 编排器（`gpu.H3Backend._body`） |
+| 按官方格式拼 `prompt` | 编排器（`schema.IRSections.final_prompt`，`_body` 调它） |
 | 调 SGLang、落盘 mp4 | 编排器提交 + 轮询，成片从 `/content` 取回 |
 | ffmpeg 抽末帧 / 探时长 / poster | **编排器本地**：GPU 机的宿主机没有 ffmpeg，而成片反正要落到编排器 |
 | 末帧直方图（漂移检测） | 编排器（`Beat.drift`） |
@@ -535,7 +582,23 @@ v0.1 要求"必须自己写一层"。写了骨架（`services/h3-wrapper`）但�
 **没有细粒度埋点就没法调优**——2.1 节整张表和 depth-2 的回退结论都是这些数字给的。
 
 `WrapperBackend` 留在代码里（`GPU_BACKEND=wrapper`），是给"GPU 机不能回连我们"那种拓扑留的后路，
-和 `H3_TRANSPORT=ssh` 同一个用途。
+和 `H3_TRANSPORT=ssh` 同一个用途。它自带一份格式代码只为跑基准——**线上不经过它**，所以改格式
+只需要部署编排器。
+
+**提示词格式归谁管。** MiniMax 官方那份 `h3-prompt-writing` skill 的三个文件原样 vendor 在
+`docs/h3official/`（`base-en.txt` / `ref-en.txt` / `SKILL.md` + 一份来源说明），代码里每一条
+`§x.y` 引用都指向它。分三层落地，缺任何一层这个格式都会慢慢烂掉：
+
+| 层 | 在哪 | 管什么 |
+|---|---|---|
+| 拼装 | `schema.IRSections.final_prompt` | §2.1 对齐指令 + §2.2 三个带标签的字段与空行 |
+| 生成 | `prompts.PROMPTIR_SYSTEM` | §4.1–§4.7 的写法规则；worked example 抄的是指南的 Case 2 |
+| 校验 | `ir_validator.RULES`（21 条） | 每条都标了出处；没标出处的就是我们自己发明的 |
+
+不能只靠第二层：模型会把冻结文本改写成近似的东西（实测复现率 48–81%）。所以 styleAnchor、
+角色外观、台词壳这三样都是**代码拼好、校验器逐字验证**，模型只负责它们之间的句子。
+`bench/test_h3_format.py` 拿指南本身当 oracle——它的 Case 2 必须被我们拼得出来、也必须被校验器接受。
+上游改了指南，就重新 vendor 一次，三层一起改。
 
 ### 5.3 GPU 槽位调度器
 
@@ -636,6 +699,9 @@ DAG 可视化。未选择的分支视频已经生成好且缓存 → 点击即�
 | H3 超时 | 重试一次并降参：**只降时长** `14.375s → 10.125s`（243 帧，下一格） | ✅ |
 | H3 二次失败 | 拿一张静帧做 Ken Burns 幻灯 + 旁白，剧情继续（"静帧章节"） | ⬜ 没做。注意底图要换成**父拍的末帧**：mid-story 已经没有关键帧可用了（3.2） |
 | PromptIR validator 失败/超时 | 回退模板拼装 IR（Director 字段直填三段模板），**fail-open** | ✅ `ir_source=template`，调试面板看得到 |
+| 模型把台词壳改写了 / 丢了 | fatal 违规 → 带修复指令重编译一次；仍不过才走上面那条模板兜底 | ✅ 这层不能 fail-open：壳丢了就是听不懂的人声（3.6） |
+| 模板兜底时没法翻译中文 | 兜底 IR 的正文会是中英混排：Director 的 `action`/`setting` 是中文，兜底里没有模型可以译 | 🟡 **故意的**。结构（`[Shot 1]`、台词壳、三个字段）都是对的，只有正文语言不合规——比不出片好 |
+| 旧存档的世界圣经没有 `*_en` 字段 | 逐个退回对应的中文字段（`styleAnchorEn or styleAnchor`，以此类推） | ✅ 画面/环境音用中文描述 H3 认；只有台词壳非英文不可，所以 `voiceEn` 空了就退化成 `The speaker (S1)` |
 | Director JSON 不合 schema | 重试一次 → 仍失败则"通用二选一"兜底 | ✅ 就是玩家报过的"只有继续向前/退回原路"——那次是 schema 一直不过，兜底生效了，但兜底本身太朴素 |
 | 视觉漂移超阈值 | 原方案：强制 `cut` + SD3.5 重锚定关键帧 | 🟡 只剩检测：`needs_reanchor` 照样置位并发事件，但默认不再触发重画（3.3 说明了为什么） |
 | 单个 SGLang 实例掉线 | 冷却 `GPU_COOLDOWN_S`，槽位降到 1，按 `predicted_choice` 生成 | ✅ |
@@ -689,6 +755,9 @@ checkpoint 是 Stage-DMD 蒸馏版，只烤了 9 个 sigma 格点（8 次 DiT fo
     `num_frames` 不支持。要给条件帧只能走 `conditions[].uri`。记录在 `bench/probe_http_only.py`。
 12. **`conditions[].uri` 收 http URL。** 实测服务端从我们这台机器拉走了 2,044,883 字节。
     这一条把整套 ssh/scp 搬运替换掉了（见 5.1），也是 v0.2 第 7 项。
+13. **提示词格式不是"风格偏好"，它有可听见的后果。** 同一句台词：不套 `<d>` 壳的 62 字符 prompt →
+    ASR 转出来是乱码；套了壳的 1036 字符官方格式 prompt → 转出来正好是写好的那句话，**延迟一样**。
+    ⬜ 全量重测还没做（玩家报过"很多都听不懂"），这是格式改完之后第一个该量的东西。
 
 ---
 
@@ -782,7 +851,16 @@ v0.1 的模板照抄会 **400**：`model` / `seconds` / `quality` / `num_inferen
 // POST http://172.31.45.68:30010/v1/videos
 {
   "task": "fl2va",
-  "prompt": "<PromptIR 输出的三段 IR，单 \\n 分隔>",
+  // MiniMax 官方格式（docs/h3official/base-en.txt §2.1 + §2.2），由
+  // `IRSections.final_prompt()` 拼出来。SGLang 不套 chat template、不做改写，
+  // 原样 tokenize，所以**这一串就是 IR 本身**。三个结构要点：
+  //   1. 第一行是对齐指令，说明参考图对应目标视频的哪一瞬间，然后空一行。
+  //      挂首帧 → I2VA 那一行（我们每拍都是这种）；首尾都挂 → FL2VA；只挂末帧 → L2VA；
+  //      什么都不挂 → 整行省掉。`task` 虽然固定写 fl2va，但一拍只挂首帧，
+  //      所以用的永远是 I2VA 这一行
+  //   2. 三个字段各带自己的标签、按固定顺序、彼此空一行隔开；缺的字段写 `N/A`，不是删掉
+  //   3. 台词必须套 `<d>[Chinese] …</d>`，说话人身份与语气写在壳**外面**（§4.4）
+  "prompt": "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\nintegrated_multimodal_description: [Shot 1] Live-action, cinematic, 35mm film grain, …the woman shown in <Picture 1> pushes the ancestral hall's wooden door…, and the young woman with a cool, slightly hoarse voice (S1) says: <d>[Chinese] 这里有人来过。</d>\n\noverall_soundscape: Distant rain falls steadily while old timber creaks under its own weight…\n\nnon_diegetic_music: Sustained low strings and a single detuned piano at roughly 60 BPM…",
   "conditions": [
     // http URL，不是 file://：H3 自己来我们的 :8101 拉这张图
     { "type": "image",
@@ -811,3 +889,8 @@ v0.1 的模板照抄会 **400**：`model` / `seconds` / `quality` / `num_inferen
 - **其余每一拍**：`uri` 指向上一拍的 `last.png`——同一个目录、同一个只读服务，**没有上传这一步**。
   `cut` / `timeskip` 也走这条，换地方靠 IR 里的运镜要求（3.2）
 - 例外：父拍的末帧不存在，或 `MIDSTORY_KEYFRAMES=1`——那时才会再出现一张这一拍自己画的 SD3.5 图
+
+`prompt` 这一串会被原样存进 `sessions/<sid>/ir/<beat>.txt`，debug 面板读的就是这个文件。
+编译时先按"预计会挂首帧"写一份，请求真发出去之后再用后端实际发送的字节覆盖一次
+（`Store.rewrite_ir_prompt`）——因为条件帧是否活到发请求那一刻由后端决定，只存编译时的猜测，
+就会出现面板上显示的提示词根本没被送出去过。

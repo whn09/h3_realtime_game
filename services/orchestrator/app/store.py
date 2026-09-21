@@ -229,13 +229,34 @@ class Store:
     # -- audit trail -------------------------------------------------------- #
 
     def write_ir(self, sid: str, beat_id: str, prompt: str, meta: dict[str, object]) -> None:
-        """Archive the exact prompt string sent to H3.
+        """Archive the prompt and the compile-time metadata.
 
         This is the thing to look at when a beat comes out wrong: the IR is what
-        the model actually saw, and it is otherwise buried inside the request."""
+        the model actually saw, and it is otherwise buried inside the request.
+
+        Written at compile time, so the `prompt` here is the orchestrator's own
+        assembly. `rewrite_ir_prompt` replaces it once the backend reports what it
+        really sent."""
         d = self.session_dir(sid) / "ir"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{beat_id}.txt").write_text(prompt, encoding="utf-8")
         (d / f"{beat_id}.meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+    def rewrite_ir_prompt(self, sid: str, beat_id: str, prompt: str) -> None:
+        """Replace the archived prompt with the bytes the backend actually sent.
+
+        Only the `.txt`; the `.meta.json` records the compile, which has not
+        changed. Separate from `write_ir` because the two happen seconds apart and
+        at different layers: the sections are known when PromptIR returns, but the
+        §2.1 alignment instruction depends on whether a conditioning frame survived
+        all the way to the request, which only the backend finds out. Archiving the
+        compile-time guess and never correcting it is how the debug panel ends up
+        showing a prompt that was never sent.
+        """
+        if not prompt:
+            return
+        d = self.session_dir(sid) / "ir"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{beat_id}.txt").write_text(prompt, encoding="utf-8")

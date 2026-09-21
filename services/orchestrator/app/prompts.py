@@ -9,13 +9,13 @@ All three are large and static, which is exactly the shape prompt caching wants:
 they sit in the cached system block while the per-beat context goes in the user
 message (see `llm.LLM._invoke`).
 
-> **PromptIR caveat.** `PROMPTIR_SYSTEM` below encodes the H3 IR format as
-> DESIGN.md describes it, but the authoritative artefact is the reference
-> implementation's system prompt -- the official guide excerpt, its 36 numbered
-> rules, and its four gold examples. Those gold examples in particular do more
-> for output quality than any amount of rule prose. When that repo is available,
-> paste its prompt in here verbatim and keep `ir_validator.py` as the enforcement
-> layer. Treat what follows as a working stand-in, not as the spec.
+`PROMPTIR_SYSTEM` is written *in English*, unlike the other two, because its
+output has to be English and a model drifts toward the language it was instructed
+in. Its rules are not ours: they are `docs/h3official/base-en.txt` sections 4.1
+through 4.7, vendored from MiniMax's own `h3-prompt-writing` skill, and its worked
+example is that guide's Case 2 verbatim. `ir_validator.py` is the enforcement
+layer for the same sections. When upstream changes the guide, re-vendor it and
+change all three together.
 """
 
 from __future__ import annotations
@@ -35,9 +35,11 @@ WORLDSMITH_SYSTEM = """你是一部互动电影的世界构建师。用户给你
 - `genre`：题材标签，2-6 字
 - `logline`：一句话故事，30 字以内，必须包含"谁 / 想要什么 / 阻碍是什么"
 - `style_anchor`：**最重要的字段**。冻结的视觉语法，80-140 字，必须明确写出：胶片/数字质感、镜头焦段倾向、光比与主光方向、色彩调色（具体颜色词，不要"电影感"这类空话）、颗粒/噪点程度。这段话会被原样塞进每一段视频的提示词，所以它必须是**可以直接指导画面生成的描述**，而不是评价。
-- `style_anchor_en`：上面这段视觉语法的英文版，30-60 词。**只给文生图模型用**（它对英文明显更服从），所以要写成图像提示词的口吻：逗号分隔的短语，不要整句，不要解释。内容必须和 `style_anchor` 说的是同一件事。
+- `style_anchor_en`：上面这段视觉语法的英文版，30-60 词，逗号分隔的短语，不要整句、不要解释。**这是最终会进入视频提示词的那一版**（H3 官方格式要求正文全英文），所以第一个短语必须是画面类型（`Live-action, cinematic` / `2D-animated` / `3D CG` / `vintage film` 之类），其余依次是质感、焦段、光比与主光方向、具体颜色词、颗粒程度。内容必须和 `style_anchor` 说的是同一件事。
 - `music_bible`：冻结的音乐语法，40-80 字：编制（具体乐器）、BPM 数值、调性、情绪基线。
+- `music_bible_en`：上面这段音乐语法的英文版，**1-2 个完整英文句子**（不是短语堆砌）。只写编制、速度、节奏型、力度变化，例如 `Sustained low strings and a single prepared piano at roughly 60 BPM, with a slow swell every four bars.`。**禁止**抽象情绪词（`haunting`、`emotional`、`epic`）和"这段音乐是为了表现…"这种解释——H3 官方格式明确禁止。
 - `ambience`：这个世界的环境音底噪，20-40 字，贯穿全程不中断。
+- `ambience_en`：上面这段底噪的英文版，**1-2 个完整英文句子**。只写画内能听见的声音（风、雨、人流、机械、远处的动静），不要写音乐、不要写对白。
 - `pov`：`"first"` 或 `"third"`。第一人称适合悬疑/恐怖/探索，第三人称适合史诗/群像。
 - `protagonist_id`：主角的 id，必须出现在 characters 里。
 - `characters`：2-4 个角色。每个：
@@ -46,6 +48,7 @@ WORLDSMITH_SYSTEM = """你是一部互动电影的世界构建师。用户给你
   - `appearance`：**60-110 字的纯外观描述**。发型发色、脸部特征、体型、服装的材质与颜色、随身物件。禁止写性格、身份、过往。这段会被逐字复用来防止角色漂移，所以必须是**画得出来的**。
   - `appearance_en`：上面这段外观的英文版，25-50 词，逗号分隔的短语。**只给文生图模型用**。每次剧情切换场景（硬切/时间跳跃）时，这个角色会被重新画一遍，那一帧没有上一帧可以继承长相——这段英文就是那一帧唯一的依据，所以脸部特征和服装的具体颜色必须在里面。
   - `voice`：音色描述，10-25 字（用于对白）
+  - `voice_en`：上面这段音色的英文版，**6-14 词的名词短语**，能直接嵌进英文句子里，例如 `a young woman with a quiet, slightly hoarse voice`。H3 要求说话人的身份描述写在台词块之外、且用英文，所以这段是它判断音色、年龄、性别、语速的唯一依据。要包含：性别、年龄段、音高/质感、语速。
   - `arc`：这个角色在故事里会经历什么，20-40 字
 - `world_rules`：3-5 条这个世界的硬规则。要**有机制感**、能产生选择：修仙写境界体系与代价，末日写感染机制与资源规律。禁止"这是一个危险的世界"这种废话。
 - `stat_names`：2-4 个由这个世界观决定的数值名（中文，2-4 字）。修仙→灵力/境界；末日→体力/物资/感染度；都市→资金/人望。这些数值会构成后果系统。
@@ -236,130 +239,162 @@ def director_custom_user(
 # PromptIR -- runs once per beat per branch                                    #
 # --------------------------------------------------------------------------- #
 
-PROMPTIR_SYSTEM = """你是 MiniMax-H3 视频生成模型的提示词编译器。输入是一份结构化的镜头意图，输出是 H3 的 IR（中间表示）。
+# Written in English, unlike the other two prompts in this module, and that is
+# deliberate rather than sloppy: this prompt's output must be English prose
+# (`docs/h3official/SKILL.md` -- "Write rewrite sections in English; preserve
+# dialogue, lyrics, and visible scene text in their original language"), and an
+# instruction set written in the output language is the cheapest way to stop a
+# model drifting back into the language of its instructions mid-paragraph.
+PROMPTIR_SYSTEM = """You are a prompt compiler for the MiniMax-H3 video model. Your input is a structured shot intent; your output is H3's `integrated_multimodal_description` and its sound fields, in the exact format MiniMax documents.
 
-你不是在"润色文案"。你在**编译**：输入的每一个字段都必须在输出里有对应，不允许增加输入没有的剧情事件，也不允许丢掉输入给定的约束。
+You are not polishing copy. You are **compiling**: every field of the input must appear in the output, you may not add story events the input does not contain, and you may not drop a constraint the input gives you.
 
-## IR 的三段结构
+## Language
 
-IR 由三段组成，各自职责严格分离：
+Write all prose in **English**. The only text that stays in its original language is text that is literally heard or seen: spoken lines inside `<d>...</d>`, and on-screen writing inside double quotes. Everything else -- camera, appearance, action, environment, sound -- is English.
 
-1. `integrated_multimodal_description`——视听一体的单段描述。这是主体。
-2. `overall_soundscape`——**画内音**（环境音、动作音、拟声）。
-3. `non_diegetic_music`——**画外配乐**（配乐、氛围乐）。
+## integrated_multimodal_description
 
-## 第一段怎么写
+One continuous English paragraph, 90-150 words. No line breaks, no lists, no headings. Organise it in this order:
 
-一段连续的散文，180-320 字，**不分行、不用列表、不加标题**。按这个顺序组织：
+1. **Camera and composition.** Name the framing (`a wide shot`, `a medium shot`, `a close-up`, `a POV shot`), then the camera motion as a natural action in the sentence, built from motion type + amplitude + speed. The motion types available to you are exactly: `Static Shot`, `Zoom In`, `Zoom Out`, `Push In`, `Pull Out`, `Pan Left`, `Pan Right`, `Truck Left`, `Truck Right`, `Tilt Up`, `Tilt Down`, `Pedestal Up`, `Pedestal Down`, `Arc Shot`, `Tracking Shot`, `Shake Slightly`, `Shake Strongly`, `POV`, `Roll Clockwise`, `Roll Counterclockwise`. Amplitude is `with small amplitude` or `with large amplitude`; speed is `at slow speed` or `at fast speed`; omit either when it is unremarkable. Write `The camera pushes in with small amplitude at slow speed toward the folded letter`, not `push in, small amplitude, slow`. **A static shot is more stable than a moving one** -- when in doubt, hold still.
+2. **Subject and appearance.** Copy each supplied appearance description **word for word**. Do not rewrite it, shorten it, or swap in synonyms. Verbatim reuse is the only thing keeping a character's face the same from one beat to the next.
+3. **Action.** Exactly one action, written from its starting pose to its ending pose, with a sense of elapsed time ("over the first few seconds... then holds"). The duration has to be filled, but not with a second action.
+4. **Environment and light.** Place, time of day, direction of the light source, weather.
+5. **Dialogue**, if the input supplies any: insert the supplied clause **verbatim, character for character**, including the `(S1)` speaker ID and the `<d>[Chinese] ...</d>` wrapper. Place it where it belongs in the action, and you may add a short delivery or gesture phrase *outside* the `<d>` block. Never edit anything inside `<d>`.
+6. **Visual style.** **Do not write it.** The compiler prepends `[Shot 1]` and the frozen style phrases to your paragraph. Writing them yourself wastes words and produces a paraphrase of frozen text. Just make sure your light and colour wording does not contradict the anchor you are shown.
 
-1. **机位与运动**：用具体的摄影语言。`wide`→"大远景，广角"；`medium`→"中景"；`closeup`→"特写"；`pov`→"第一人称主观视角"；`tracking`→"跟拍"；`aerial`→"航拍俯视"。如果镜头有运动，写清方向和速度（"缓慢横移"、"固定不动"）。**固定镜头往往比运动镜头稳定**，不确定时选固定。
-2. **主体与外观**：把输入给的角色外观描述**逐字搬进来**，一个字都不要改写、不要压缩、不要替换同义词。这是防止角色在段落之间变脸的唯一手段。
-3. **动作**：一个动作，从起始姿态写到结束姿态。写出时间感（"在前 5 秒里…随后停住"），因为 15 秒需要被填满，但不能填成两个动作。
-4. **环境与光**：地点、时刻、光源方向、天气。
-5. **对白**（如果有）：格式为 `角色名（音色描述）说："台词"`。每句台词后面标注它在时间轴上的大致位置。
-6. **视觉风格**：**不要写**。style_anchor 由编译器在你的输出末尾自动逐字追加，你重复写一遍只会浪费长度、并且大概率写成改写版。你只需要让第 4 点的光线与色彩描述**不跟它冲突**。
+This beat is **one shot**. Never write `[Shot 2]`, never write a cut, a timestamp, a dissolve, or a fade. A cut here would break the frame the next beat is generated from.
 
-## 第二段与第三段怎么写
+## overall_soundscape
 
-- `overall_soundscape`：30-70 字。只写画内音：环境底噪 + 输入指定的 sfx_focus + 动作产生的声音。**不要写音乐**。
-- `non_diegetic_music`：30-60 字。只写配乐：编制、BPM、调性、情绪。**不要写画内音效**。通常直接复用输入给的 music_bible。
+1-4 English sentences, one paragraph. **Diegetic sound only**: ambient bed, action sounds, non-verbal human sounds (wind, rain, footsteps, fabric, impacts, breathing). Do **not** repeat dialogue here, and do **not** describe music. Write `N/A` only if the beat is meant to be silent.
 
-## 绝对禁止
+## non_diegetic_music
 
-- 禁止 markdown：不要 `#`、`-`、`*`、`**`、编号列表。
-- 禁止对模型说话："请生成"、"要求画面"、"注意"。IR 是对画面的**陈述**，不是指令。
-- 禁止元词汇："电影感"、"高质量"、"4K"、"杰作"、"精美"。这些不描述任何具体画面，只挤占注意力。
-- 禁止写分辨率、时长、宽高比。这些由 API 参数控制，写进 IR 只会造成冲突。
-- 禁止增加输入没有的剧情：不要新增角色、不要新增场景转换、不要替玩家做选择。
-- 禁止改写角色外观。逐字复用。
-- 台词总量不超过输入给定的字数上限。超了口型和声音都会坏。
+1-3 English sentences. Score the audience hears and the characters do not. Instrumentation, tempo, rhythm, dynamic change. No abstract mood words, no explaining what the music is *for*. Write `N/A` if there is no score.
 
-## 输出格式
+## Forbidden
 
-只输出一个 JSON 对象，不要解释，不要 markdown 代码块："""
+- No markdown: no `#`, `-`, `*`, `**`, no numbered lists.
+- No talking to the model: "please generate", "make sure", "the video should". This is a **statement about what is on screen**, not an instruction.
+- No quality filler: `beautiful`, `masterpiece`, `high quality`, `4K`, `8K`, `award-winning`, `stunning`, `epic`. They describe no picture and only crowd out attention.
+- No resolution, duration or aspect ratio. Those are API parameters; writing them here only conflicts with them.
+- No new story: no new characters, no scene changes, no choices made on the player's behalf.
+- No rewriting an appearance, and no rewriting anything inside `<d>`.
+- Never exceed the dialogue budget you are given. Past it, lip sync and voice both break.
+
+## Worked example (the input mode you are always compiling for)
+
+A first frame is attached, so the paragraph opens from that picture and develops forward. This is what a correct output looks like -- note the verbatim `<d>` block, the speaker ID outside it, and that the paragraph contains exactly one shot:
+
+```
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, the young woman shown in <Picture 1> remains beside the rain-covered train window, preserving her appearance, clothing, seat position, and the carriage layout. The camera trucks right with small amplitude at slow speed as she lifts her gaze from the folded letter toward the passing city lights. Her reflection moves across the glass while the quiet, breathy young woman (S1) says: <d>[English] I get off at the next station.</d> She folds the letter along its existing crease.
+
+overall_soundscape: The train wheels produce a steady metallic rhythm beneath a low ventilation hum. Rain ticks against the window while paper rustles softly in her hands.
+
+non_diegetic_music: Sustained cello notes at a slow tempo with widely spaced piano tones, gradually decreasing in volume.
+```
+
+## Output format
+
+Output one JSON object. No explanation, no markdown fence:"""
 
 PROMPTIR_OUTPUT_FULL = """
 ```
-{"description": "第一段…", "soundscape": "第二段…", "music": "第三段…"}
+{"description": "...", "soundscape": "...", "music": "..."}
 ```"""
 
-PROMPTIR_OUTPUT_DESC_ONLY = """
+PROMPTIR_OUTPUT_NO_MUSIC = """
 ```
-{"description": "第一段…"}
+{"description": "...", "soundscape": "..."}
 ```
-**只输出 `description` 一个字段。**第二段和第三段由系统从世界圣经直接填充（它们每拍几乎不变，让你生成纯属浪费）。"""
+**Omit `music`.** The score is assembled from the world bible, because it is the one field with no per-beat input and it must stay near-identical between beats or the music audibly restarts at every join."""
 
 
 def promptir_user(
     *,
     shot_block: str,
     characters_block: str,
-    style_anchor: str,
-    music_bible: str,
-    ambience: str,
+    style_anchor_en: str,
+    music_bible_en: str,
     continuity_block: str,
+    dialogue_block: str,
     dialogue_budget: int,
     seconds: float,
-    desc_only: bool,
+    templated_music: bool,
 ) -> str:
     tail = (
         ""
-        if desc_only
-        else f"\n音乐语法（第三段请直接复用）：\n{music_bible}\n\n环境音底噪：\n{ambience}"
+        if templated_music
+        else f"\nMusic grammar for this world (reuse it in `music`, in English):\n{music_bible_en}\n"
     )
-    return f"""镜头意图：
+    return f"""Shot intent:
 {shot_block}
 
-在场角色的外观圣经（**逐字搬进第一段**）：
-{characters_block or "（本镜无具名角色）"}
+Appearance bible for the characters on screen (**copy these into the paragraph word for word**):
+{characters_block or "(no named character in this shot)"}
 
-视觉风格锚点（**只读参考，不要抄写**——编译器会把它逐字追加到你输出的末尾）：
-{style_anchor}
+Dialogue to place (**insert verbatim, including the speaker ID and the whole `<d>...</d>` block; edit nothing inside `<d>`**):
+{dialogue_block}
+
+Frozen style phrases (**read-only, do not copy** -- the compiler prepends these to your paragraph):
+{style_anchor_en}
 {tail}
-
 {continuity_block}
 
-时长：{seconds:.0f} 秒。对白总量上限：{dialogue_budget} 个汉字。
+Duration: {seconds:.0f} seconds. Dialogue budget: {dialogue_budget} Chinese characters total.
 
-编译成 IR。"""
+Compile."""
 
 
 # --------------------------------------------------------------------------- #
-# Templated tail (used when IR_TEMPLATE_TAIL is on)                            #
+# Templated music (used when IR_TEMPLATE_TAIL is on)                           #
 # --------------------------------------------------------------------------- #
+#
+# Only the music is templated now, not the whole tail. The split is not arbitrary:
+# `non_diegetic_music` has no per-beat input at all -- it is the world's frozen
+# music grammar plus a tension shade -- so an LLM call adds nothing but tokens.
+# `overall_soundscape` does have per-beat input (the Director's `sfx_focus`), and
+# that input arrives in Chinese, so turning it into the 1-4 English sentences
+# section 4.6 wants is a translation only the model can do.
 
 
-def template_soundscape(ambience: str, sfx_focus: str, setting: str) -> str:
-    """Build section 2 without an LLM call.
+def template_soundscape(ambience_en: str, ambience: str) -> str:
+    """Section 2 without an LLM call -- only reachable from `template_ir()`.
 
-    Costs nothing and is byte-stable across beats, which is what section 3.5
-    wants from the sound bed anyway.
+    The normal path lets the model write this section, because the per-beat
+    `sfx_focus` arrives in Chinese and only the model can render it as the English
+    sentences section 4.6 asks for. This builder exists for the fallback, where
+    there is no model to ask, and so it deliberately uses only the session-level
+    ambience bed.
+
+    `ambience` (Chinese) is the last resort for a bible written before
+    `ambience_en` existed. A Chinese sound bed is a format violation but an
+    audible one only in the mildest sense -- H3 renders ambience from Chinese
+    perfectly well; it is *speech* that degrades without the `<d>` wrapper -- so
+    it beats emitting `N/A` and asking for silence.
     """
-    # The Worldsmith writes `ambience` as a finished sentence, so its trailing
-    # full stop has to come off before joining -- otherwise the section reads
-    # `…若隐若现。，晨雾笼罩的…`.
-    parts = [
-        p.strip().rstrip("。！？")
-        for p in (ambience, f"{setting}的环境声" if setting else "", sfx_focus)
-        if p and p.strip()
-    ]
-    seen: list[str] = []
-    for p in parts:
-        if p and p not in seen:
-            seen.append(p)
-    return "，".join(seen) + "。"
+    bed = (ambience_en or "").strip() or (ambience or "").strip()
+    if not bed:
+        return "N/A"
+    return bed if bed[-1] in ".!?。！？" else bed + "."
 
 
-def template_music(music_bible: str, tension: float) -> str:
-    """Section 3, with one tension-driven modifier.
+def template_music(music_bible_en: str, tension: float) -> str:
+    """Section 3 without an LLM call, per `docs/h3official/base-en.txt` section 4.7.
 
     Deliberately minimal: the music description must stay near-identical between
-    beats or the score audibly restarts at every join."""
-    base = music_bible.strip().rstrip("。")
+    beats or the score audibly restarts at every join. The tension shade is worded
+    as dynamics rather than mood because §4.7 rules out abstract mood words.
+    """
+    base = music_bible_en.strip().rstrip(".")
+    if not base:
+        return "N/A"
     if tension >= 0.75:
-        shade = "，情绪紧绷，低音渐强"
+        shade = ", with the low register swelling and the pulse tightening"
     elif tension <= 0.25:
-        shade = "，情绪松弛，织体稀疏"
+        shade = ", thinned out to sparse sustained tones at a slower tempo"
     else:
         shade = ""
-    return f"{base}{shade}。"
+    return f"{base}{shade}."

@@ -145,6 +145,11 @@ class GpuResult:
     timings: dict[str, float] = field(default_factory=dict)
     endpoint: str = ""
     degraded: bool = False
+    # The exact string the backend tokenized, assembled instruction line and all.
+    # Carried back so the beat's archived IR is the bytes H3 saw rather than the
+    # orchestrator's guess at what the backend would build from the same sections
+    # -- and the debug panel shows one, not the other.
+    prompt: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -284,6 +289,10 @@ class WrapperBackend:
             frame_stats=data.get("frame_stats"),
             timings={f"gpu_{k}": v for k, v in (data.get("timings") or {}).items()},
             endpoint=endpoint,
+            # The wrapper assembles the prompt on its side of the wire and returns
+            # the string it actually sent, which is the only way to tell that its
+            # copy of the format and ours have not drifted apart.
+            prompt=data.get("prompt", ""),
         )
 
 
@@ -664,7 +673,17 @@ class H3Backend:
                 {"role": "keyframe", "type": "image", "uri": keyframe, "frame_index": 0}
             ]
         body: dict[str, Any] = {
-            "prompt": req.ir.to_prompt(),
+            # The full documented prompt, instruction line and all. SGLang tokenizes
+            # this field verbatim -- no chat template, no rewriter, no length
+            # normalisation -- so whatever goes here *is* the IR, and `final_prompt`
+            # is where the format lives. Note it keys off `keyframe`, not `task`:
+            # `task` is always `fl2va` because that is what the replicas serve,
+            # while a beat attaches only a first frame, which is the I2VA case.
+            "prompt": req.ir.final_prompt(
+                first_frame=bool(keyframe),
+                last_frame=False,
+                seconds=frames / settings.h3_fps,
+            ),
             "task": "fl2va" if keyframe else "t2va",
             "conditions": conditions,
             "target": {
@@ -717,7 +736,19 @@ class H3Backend:
         body = self._body(
             GpuRequest(
                 job_id=f"warm-{rep.alias}",
-                ir=IRSections(description="a wide shot of a quiet harbour at dawn"),
+                # Shaped like a real beat -- `[Shot 1]`, a style declaration, a
+                # camera term -- because the point of a warm-up is to compile the
+                # kernels the real requests will hit, and a prompt of a different
+                # length is a different graph.
+                ir=IRSections(
+                    description=(
+                        "[Shot 1] Live-action, cinematic, a wide shot frames a quiet harbour "
+                        "at dawn. The camera holds a static shot as mist drifts across the "
+                        "water and a moored boat rocks slightly."
+                    ),
+                    soundscape="Water laps against the hull beneath a faint, steady wind.",
+                    music="N/A",
+                ),
             ),
             frames_for_seconds(settings.beat_seconds),
             None,
@@ -765,7 +796,8 @@ class H3Backend:
             log.warning("conditioning frame %s is gone; falling back to t2va", req.first_frame)
 
         t0 = time.perf_counter()
-        vid = await self._submit(rep, self._body(req, frames, keyframe))
+        body = self._body(req, frames, keyframe)
+        vid = await self._submit(rep, body)
         data = await self._poll(rep, vid)
         timings["gpu_server_ms"] = round((data.get("inference_time_s") or 0.0) * 1000.0, 1)
         timings["gpu_onbox_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
@@ -812,6 +844,9 @@ class H3Backend:
             frame_stats=stats,
             timings=timings,
             endpoint=rep.alias,
+            # Read back out of the body rather than recomputed: this is the field
+            # SGLang was handed, so it cannot disagree with what was generated.
+            prompt=str(body.get("prompt", "")),
         )
 
 
@@ -898,6 +933,12 @@ class FakeBackend:
             frame_stats=stats,
             timings={"gpu_sglang_ms": round((time.perf_counter() - started) * 1000.0, 1)},
             endpoint=endpoint,
+            # ffmpeg reads none of it, but assembling it anyway means the fake path
+            # exercises the format code and the debug panel shows the same thing it
+            # would show against a real GPU.
+            prompt=req.ir.final_prompt(
+                first_frame=bool(req.first_frame), last_frame=False, seconds=req.seconds
+            ),
         )
 
     def _cmd(self, src: str, dest: Path, vf: str, seconds: float, tone: int) -> list[str]:

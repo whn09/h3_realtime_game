@@ -480,11 +480,36 @@ export default function DebugPanel({ sid, session, shown, events, onClose }: Pro
                 </p>
               )}
 
+              {/* Literally the bytes SGLang tokenized: the engine overwrites this
+                  archive with the backend's own `prompt` once the clip is back, so
+                  what shows here cannot disagree with what was generated. */}
               <h4>IR（送进 H3 的完整提示词）</h4>
               {ir ? (
                 <>
                   <pre className="dbg-pre">{ir.prompt}</pre>
+                  <ul className="dbg-notes">
+                    <li>
+                      MiniMax 官方格式（docs/h3official/base-en.txt）：第一行是关键帧对齐指令，
+                      空行之后是三个带标签的字段。正文英文，台词留在{" "}
+                      <code>{"<d>[Chinese] …</d>"}</code> 里——台词不套这层壳，H3 就只会发出
+                      听不懂的人声。
+                    </li>
+                  </ul>
                   <div className="dbg-kv dbg-kv-tight">
+                    <div>
+                      <b>对齐指令</b>
+                      <span>
+                        {ir.prompt.startsWith("For the target video")
+                          ? "I2VA（首帧 0.00s）"
+                          : ir.prompt.startsWith("How the reference pictures")
+                            ? "FL2VA / L2VA"
+                            : "无（t2va）"}
+                      </span>
+                    </div>
+                    <div>
+                      <b>台词块</b>
+                      <span>{(ir.prompt.match(/<d>/g) ?? []).length} 句</span>
+                    </div>
                     <div>
                       <b>字数</b>
                       <span>{ir.prompt.length}</span>
