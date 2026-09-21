@@ -6,6 +6,12 @@
 视频来自自建的 [MiniMax-H3](https://docs.sglang.io/cookbook/diffusion/MiniMax/MiniMax-H3)
 SGLang Diffusion 部署（`fl2va`，末帧续接），文本和图像来自 Bedrock。
 
+送给 H3 的提示词严格按
+[MiniMax 官方格式](https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills/h3-prompt-writing)
+拼装（指南已 vendor 到 `docs/h3official/`）。这不是风格偏好：台词不套官方那层
+`<d>[语言] …</d>` 壳，H3 分不清"该念出这几个字"和"画面里有人在说话"，出来的是口型对得上、
+但听不懂的人声。见 DESIGN 3.6。
+
 完整设计、每个数字的来历、以及所有还没做的事，见 **[DESIGN.md](DESIGN.md)**。
 
 ## 组成
@@ -15,7 +21,8 @@ SGLang Diffusion 部署（`fl2va`，末帧续接），文本和图像来自 Bedr
 | `services/orchestrator` | 全部的脑子。世界圣经（Worldsmith）、分支（Director）、提示词编译（PromptIR）、GPU 槽位调度、末帧抽取、SSE 事件流。FastAPI。 |
 | `web` | 播放器。视频池、决断浮层、剧情树、历史记录。Next.js 16 App Router。 |
 | `services/h3-wrapper` | 每个 SGLang 实例前面的一层薄包装。`GPU_BACKEND=h3` 时不走这条路，留着备用。 |
-| `bench` | DESIGN 第 8 节的 P0 摸底套件。跑完才知道 19.3s 的隐藏窗口关不关得上。 |
+| `docs/h3official` | MiniMax 官方 `h3-prompt-writing` skill 的原样副本。提示词格式的唯一权威，代码里每一条 `§x.y` 引用都指向它。 |
+| `bench` | 量具。DESIGN 第 8 节的摸底套件（延迟、帧级衔接、片内硬切、faststart），外加 `test_h3_format.py`：拿官方指南本身当 oracle 验提示词格式。 |
 
 ## 跑起来
 
@@ -49,6 +56,7 @@ H3 后端全程走 HTTP：`H3_REPLICAS` 填两台 GPU 机的内网地址，条�
 
 ## 状态
 
-能从头玩到尾。当前的已知短板都记在 `DESIGN.md` 里，最大的两个是：开场要等约 90 秒
-（Worldsmith 一次调用 73 秒，纯平台延迟），以及 `REANCHOR_EVERY` 还是个猜的数，
-等 `bench/chain_drift.py` 测出真值。
+能从头玩到尾。当前的已知短板都记在 `DESIGN.md` 里，最大的两个是：开场要等约 110 秒
+（其中 Worldsmith 一次调用 89.7 秒，首 token 就等 52.4 秒，纯平台延迟），以及**视觉漂移现在
+完全无人管**——重锚定会造成片内硬切，所以默认关掉了，而 20 拍的长链一次都没量过
+（`bench/chain_drift.py` 就是为这个写的）。
