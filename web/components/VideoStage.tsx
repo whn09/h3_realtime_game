@@ -30,10 +30,22 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
  */
 
 export interface StageHandle {
-  /** Point a slot at this clip and let it buffer. Idempotent per beat. */
-  buffer: (beatId: string, url: string) => void;
+  /**
+   * Point a slot at this clip and let it buffer. Idempotent per beat.
+   *
+   * `poster` is the clip's own first frame (`poster.jpg`, ~70KB against the clip's
+   * 1.7MB). It is what the element paints until it has decoded a frame of its own,
+   * and it is the answer to the black screen: before this, a slot revealed before
+   * its first frame arrived had nothing at all to show.
+   */
+  buffer: (beatId: string, url: string, poster?: string | null) => void;
   /** Make this beat visible and play it from the start. Buffers first if needed. */
-  show: (beatId: string, url: string, fromStart?: boolean) => Promise<void>;
+  show: (
+    beatId: string,
+    url: string,
+    fromStart?: boolean,
+    poster?: string | null
+  ) => Promise<void>;
   /** Visible beat, or null before the first `show`. */
   visible: () => string | null;
   /** Current playback position of the visible clip, in seconds. */
@@ -83,7 +95,7 @@ interface Props {
    */
   onMediaError?: (beatId: string, detail: string) => void;
   /**
-   * Playback stopped for want of data (`waiting`/`stalled`), or resumed.
+   * Playback is wanted and the picture is not advancing (`waiting`), or it is.
    *
    * Worth surfacing here specifically because the clip comes down an ssh tunnel
    * that has been measured at both 107KB/s and 670KB/s within a minute: at the
@@ -240,7 +252,7 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
     []
   );
 
-  const assign = (beatId: string, url: string): number => {
+  const assign = (beatId: string, url: string, poster?: string | null): number => {
     const existing = slotOf.current.get(beatId);
     if (existing !== undefined) {
       lastUsed.current[existing] = ++useCount.current;
@@ -275,6 +287,13 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
       // Before the fetch, not after: from here until `loadeddata` this element is
       // still showing the clip it is being taken away from.
       hasFrame.current[slot] = false;
+      // Poster before src, because `load()` is what makes the element paint it: an
+      // element with no media data shows its poster, and from here until
+      // `loadeddata` that is the only picture of *this* clip that exists. 70KB
+      // against 1.7MB, so over the tunnel it lands roughly ten seconds sooner, and
+      // it is frame 0 of exactly this shot -- not a neighbour's, not black.
+      if (poster) el.poster = poster;
+      else el.removeAttribute("poster");
       el.src = url;
       // `preload="auto"` alone does not always start the fetch for a src set
       // after mount; load() makes it explicit.
@@ -286,11 +305,11 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
   useImperativeHandle(
     ref,
     (): StageHandle => ({
-      buffer: (beatId, url) => {
-        assign(beatId, url);
+      buffer: (beatId, url, poster) => {
+        assign(beatId, url, poster);
       },
-      show: async (beatId, url, fromStart = true) => {
-        const slot = assign(beatId, url);
+      show: async (beatId, url, fromStart = true, poster) => {
+        const slot = assign(beatId, url, poster);
         const el = els.current[slot];
         if (!el) return;
         wanted.current = beatId;
@@ -411,6 +430,10 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
             const id = beatOf.current[i];
             if (!id || id !== visible.current) return;
             const el = ev.currentTarget;
+            // The clock moved, so whatever it was waiting for, it got it. This is
+            // the clear that cannot lie: `canplay` is the decoder's opinion about
+            // the future, `timeupdate` is the picture actually advancing.
+            onBuffering?.(id, false);
             onTimeUpdate?.(id, el.currentTime, Number.isFinite(el.duration) ? el.duration : 0);
           }}
           onPlaying={() => {
@@ -437,16 +460,19 @@ const VideoStage = forwardRef<StageHandle, Props>(function VideoStage(
             console.warn(`[stage] media error on ${id ?? `slot ${i}`}: ${detail}`, el.currentSrc);
             if (id) onMediaError?.(id, detail);
           }}
-          // `waiting` = playback stopped because the buffer ran dry. `stalled` =
-          // no data for a while, which on this link happens without playback
-          // having started at all.
-          onWaiting={() => {
+          // `waiting` is the only event that raises it: it means playback is wanted
+          // and stopped for want of the next frame. `stalled` used to raise it too
+          // and that was wrong -- `stalled` is about the *download* going quiet,
+          // which Chrome also reports for a clip that is already playable, so the
+          // notice stuck on screen over a clip that had finished downloading in a
+          // few seconds. The element's state goes to the console at the same moment,
+          // because "readyState=4, buffered 14.4s, still waiting" and "readyState=1,
+          // buffered 0.6s" are the same picture and completely different bugs.
+          onWaiting={(ev) => {
             const id = beatOf.current[i];
-            if (id && id === visible.current) onBuffering?.(id, true);
-          }}
-          onStalled={() => {
-            const id = beatOf.current[i];
-            if (id && id === visible.current) onBuffering?.(id, true);
+            if (!id || id !== visible.current) return;
+            console.warn(`[stage] waiting on ${id}: ${mediaDetail(ev.currentTarget)}`);
+            onBuffering?.(id, true);
           }}
           onCanPlay={() => {
             const id = beatOf.current[i];

@@ -85,7 +85,10 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
   useEffect(() => {
     if (!cursor?.video_url) return;
     if (stage.current?.visible() === cursor.id) return;
-    void stage.current?.show(cursor.id, cursor.video_url);
+    // The poster travels with the clip: it is frame 0 of this very shot, and it is
+    // what the element paints for the seconds between being revealed and having
+    // decoded something of its own. That window used to be black.
+    void stage.current?.show(cursor.id, cursor.video_url, true, cursor.poster_url);
     setShownId(cursor.id);
     setMode("watching");
     setCountdown(null);
@@ -102,7 +105,7 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
     if (!shown) return;
     for (const id of Object.values(shown.children)) {
       const child = session.beats[id];
-      if (child?.video_url) stage.current?.buffer(child.id, child.video_url);
+      if (child?.video_url) stage.current?.buffer(child.id, child.video_url, child.poster_url);
     }
   }, [shown, session.beats]);
 
@@ -277,7 +280,7 @@ export default function Player({ sid, session, connected, events, onExit }: Prop
     setClipEnded(false);
     setCountdown(null);
     setMode("watching");
-    void stage.current?.show(shown.id, shown.video_url, true);
+    void stage.current?.show(shown.id, shown.video_url, true, shown.poster_url);
   }, [shown?.id, shown?.video_url]);
 
   const onSeek = useCallback(
